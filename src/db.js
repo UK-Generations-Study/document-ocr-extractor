@@ -2,7 +2,7 @@ import { openDB } from 'idb';
 
 
 async function getOrCreateDB() {
-    return openDB('medical-report-information-extractor-db', 2, {
+    return openDB('medical-report-information-extractor-db', 3, {
         upgrade(db, oldVersion) {
             // v1 stores.
             // "config" store: system prompt, JSON schemas, JSON-LD contexts, LLM API credentials.
@@ -29,6 +29,17 @@ async function getOrCreateDB() {
                 }
                 if (!db.objectStoreNames.contains('blobs')) {
                     db.createObjectStore('blobs');
+                }
+            }
+
+            // v3 store (Phase 4a): per-page OCR result. Keyed by the page's blobKey
+            // (which is stable across a document's lifetime). Kept out of the document
+            // record so we can rewrite an OCR result (e.g. after manual edit or Deep
+            // Read) without touching the document metadata.
+            if (oldVersion < 3) {
+                if (!db.objectStoreNames.contains('ocrPages')) {
+                    const ocr = db.createObjectStore('ocrPages', {keyPath: 'pageBlobKey'});
+                    ocr.createIndex('byDoc', 'docId');
                 }
             }
         }
@@ -136,12 +147,15 @@ async function deleteDocument(id) {
     const db = await getOrCreateDB();
     const doc = await db.get('documents', id);
     if (!doc) return;
-    const tx = db.transaction(['documents', 'blobs'], 'readwrite');
+    const tx = db.transaction(['documents', 'blobs', 'ocrPages'], 'readwrite');
     // Cascade-delete every blob this document references so we don't leak.
     const blobKeys = new Set();
     for (const s of doc.sources || []) if (s.blobKey) blobKeys.add(s.blobKey);
     for (const p of doc.pages || []) if (p.blobKey) blobKeys.add(p.blobKey);
     for (const key of blobKeys) tx.objectStore('blobs').delete(key);
+    // Cascade-delete OCR rows for this doc.
+    const ocrKeys = await tx.objectStore('ocrPages').index('byDoc').getAllKeys(id);
+    for (const k of ocrKeys) tx.objectStore('ocrPages').delete(k);
     tx.objectStore('documents').delete(id);
     await tx.done;
 }
@@ -154,6 +168,43 @@ async function putBlob(key, blob) {
 async function getBlob(key) {
     const db = await getOrCreateDB();
     return db.get('blobs', key);
+}
+
+/*
+   ocrPages store (Phase 4a):
+     {
+       pageBlobKey: <string>,   // = documents.pages[i].blobKey
+       docId: <string>,         // = documents.id (indexed for cascade + lookup)
+       text: <string>,          // linearized page text
+       blocks: [                // one entry per detected text block, in reading order
+         { text, x0, y0, x1, y1, confidence }
+       ],
+       source: 'quick' | 'deep' | 'edit',   // origin of the current stored value
+       updatedAt: <number>
+     }
+*/
+
+async function putOcrPage(rec) {
+    const db = await getOrCreateDB();
+    await db.put('ocrPages', rec);
+}
+
+async function getOcrPage(pageBlobKey) {
+    const db = await getOrCreateDB();
+    return db.get('ocrPages', pageBlobKey);
+}
+
+async function getOcrPagesByDoc(docId) {
+    const db = await getOrCreateDB();
+    return db.getAllFromIndex('ocrPages', 'byDoc', docId);
+}
+
+async function deleteOcrPagesByDoc(docId) {
+    const db = await getOrCreateDB();
+    const tx = db.transaction('ocrPages', 'readwrite');
+    const keys = await tx.store.index('byDoc').getAllKeys(docId);
+    for (const k of keys) tx.store.delete(k);
+    await tx.done;
 }
 
 export {
@@ -170,5 +221,9 @@ export {
     allDocuments,
     deleteDocument,
     putBlob,
-    getBlob
+    getBlob,
+    putOcrPage,
+    getOcrPage,
+    getOcrPagesByDoc,
+    deleteOcrPagesByDoc
 };

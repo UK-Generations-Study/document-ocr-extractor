@@ -31,3 +31,8 @@ private-eye/
 # Only public/coi-serviceworker.js is checked in.
 public/ort/
 public/models/
+
+# Model originals fetched by scripts/prepare-build.mjs and patched into
+# public/models/. Regenerated on demand; the patched copy in public/ is
+# what the app serves.
+models/

@@ -6,25 +6,33 @@
  *
  *   node_modules/onnxruntime-web/dist/*.wasm  ->  public/ort/
  *   private-eye/public/models/ppocr/calibration.json  ->  public/models/ppocr/
+ *   HF: PP-DocLayoutV3.onnx (patched) + inference.yml  ->  public/models/layout/doclayoutv3/
  *
  * Runs from `npm run predev` / `npm run prebuild` (see package.json).
  *
- * NOT staged in Phase 1:
- *   - Patched layout ONNX graph. Fetching + WebGPU-patching the 130 MB
- *     PP-DocLayoutV3 graph is deferred until Phase 4 (when OCR is wired up
- *     in the UI). Until then, calling into src/ocr/runtime/run-e.ts will
- *     fail at model-load time.
- *   - wllama runtime (Deep Read). Ported in a later phase.
+ * The layout graph is patched here (ceil_mode flip - see scripts/patch-layout.mjs)
+ * so the resulting model runs under ORT-web's WebGPU EP. The heavy 130 MB
+ * .onnx.data weight sidecar is NOT vendored - the app fetches it from the HF
+ * CDN on the first OCR run (src/ocr/runtime/model-cache.ts).
  *
- * Idempotent: safe to run repeatedly. Warns and continues if a source is
- * missing (e.g., `npm install` hasn't run yet, or the private-eye reference
- * directory isn't on disk).
+ * NOT staged yet:
+ *   - wllama runtime (Deep Read / GLM-OCR). Deferred to Phase 4b.
+ *
+ * Idempotent: safe to run repeatedly. `--skip-models` skips the small HF fetch
+ * for fast shell iteration when you don't need OCR loaded.
  */
-import { copyFileSync, existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { ensurePatchedLayoutModel, ORIGINAL_NAME, PATCHED_NAME } from './patch-layout.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
+const skipModels = process.argv.includes('--skip-models');
+
+// Pinned to the same rev as src/ocr/runtime/assets.ts. Update in lockstep.
+const LAYOUT_REPO = 'jeyabbalas/private-eye-models';
+const LAYOUT_REV = 'f1ec7e4768b2418c5e8cd88e9aaac217a00f6f97';
+const LAYOUT_HF_DIR = 'layout/doclayoutv3';
 
 // Only the two WASM builds ORT loads under our config (webgpu / wasm EPs with
 // numThreads=1, no proxy/JSPI): the base SIMD+threads WASM (CPU fallback) and
@@ -64,5 +72,50 @@ function stagePpocrCalibration() {
   console.log('[prepare-build] staged ppocr calibration.json -> public/models/ppocr/');
 }
 
+async function fetchToFile(url, dest) {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`GET ${url}: HTTP ${res.status}`);
+    const buf = new Uint8Array(await res.arrayBuffer());
+    mkdirSync(dirname(dest), { recursive: true });
+    writeFileSync(dest, buf);
+    return buf.byteLength;
+}
+
+async function stageLayout() {
+    // Fetch the small original graph + inference.yml, apply the patch, then
+    // vendor only the patched .onnx + yml into public/. The ~130 MB .onnx.data
+    // sidecar stays remote and streams from HF at runtime.
+    const modelsDir = join(ROOT, 'models', LAYOUT_HF_DIR);
+    const publicDir = join(ROOT, 'public/models', LAYOUT_HF_DIR);
+    const patchedInPublic = join(publicDir, PATCHED_NAME);
+    const ymlInPublic = join(publicDir, 'inference.yml');
+    if (existsSync(patchedInPublic) && existsSync(ymlInPublic)) {
+        console.log('[prepare-build] layout graph already staged -> public/models/layout/doclayoutv3/');
+        return;
+    }
+    if (skipModels) {
+        console.warn('[prepare-build] --skip-models: layout graph not staged; Quick Read will not run');
+        return;
+    }
+    const base = `https://huggingface.co/${LAYOUT_REPO}/resolve/${LAYOUT_REV}/${LAYOUT_HF_DIR}`;
+    const originalPath = join(modelsDir, ORIGINAL_NAME);
+    const ymlPath = join(modelsDir, 'inference.yml');
+    if (!existsSync(originalPath)) {
+        console.log(`[prepare-build] fetching ${ORIGINAL_NAME} from ${LAYOUT_REPO}@${LAYOUT_REV.slice(0, 7)}...`);
+        const bytes = await fetchToFile(`${base}/${ORIGINAL_NAME}`, originalPath);
+        console.log(`[prepare-build] fetched ${(bytes / 1024).toFixed(1)} KB -> models/${LAYOUT_HF_DIR}/${ORIGINAL_NAME}`);
+    }
+    if (!existsSync(ymlPath)) {
+        const bytes = await fetchToFile(`${base}/inference.yml`, ymlPath);
+        console.log(`[prepare-build] fetched ${(bytes / 1024).toFixed(1)} KB -> models/${LAYOUT_HF_DIR}/inference.yml`);
+    }
+    const patchedPath = ensurePatchedLayoutModel(modelsDir);
+    mkdirSync(publicDir, { recursive: true });
+    copyFileSync(patchedPath, patchedInPublic);
+    copyFileSync(ymlPath, ymlInPublic);
+    console.log(`[prepare-build] staged ${PATCHED_NAME} + inference.yml -> public/models/${LAYOUT_HF_DIR}/`);
+}
+
 stageOrt();
 stagePpocrCalibration();
+await stageLayout();

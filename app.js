@@ -22,8 +22,10 @@ import {
     deleteConfigRecord,
 } from './src/db.js';
 import { openWizard } from './src/ui/wizard.js';
-import { mountReportList } from './src/ui/reportList.js';
+import { mountReportList, refresh as refreshReportList } from './src/ui/reportList.js';
 import { mountReportViewer } from './src/ui/reportViewer.js';
+import { mountOcrView } from './src/ui/ocrView.js';
+import { enqueueDocument, primeQueueFromDb, recoverStuckDocuments, subscribeQueue } from './src/ocr/queue.js';
 
 import { API_PROVIDERS, DEFAULT_OPENAI_BASE_URL } from './src/core/constants.js';
 
@@ -286,9 +288,32 @@ function bindGearIcon() {
 }
 
 async function mountWorkspace() {
-    // Report list (bottom) + viewer (left). Right pane stays empty until Phase 4.
     await mountReportList({ selection });
     mountReportViewer({ selection });
+    mountOcrView({ selection });
+
+    // The queue drives status transitions on documents. Whenever anything
+    // material happens (a new doc becomes queued, OCR finishes, edits arrive)
+    // we refresh the bottom list so the badge stays honest.
+    subscribeQueue((ev) => {
+        if (ev.type === 'status' || ev.type === 'doc-done' || ev.type === 'doc-start') {
+            refreshReportList();
+        }
+    });
+
+    // Watch document ingestion so the OCR queue kicks in automatically.
+    // Rather than plumb ingest events end-to-end, we poll on a short interval
+    // - refreshReportList is cheap and we're only reading metadata. This will
+    // move to a proper event bus in Phase 5 or later.
+    setInterval(async () => {
+        // primeQueueFromDb dedupes internally, so calling it repeatedly is safe.
+        await primeQueueFromDb();
+    }, 2000);
+    // Boot recovery MUST run before the first prime pass so a doc left in
+    // 'ocr-running' from a previous session gets rewound to 'queued' before
+    // the queue looks at it.
+    await recoverStuckDocuments();
+    await primeQueueFromDb();
 }
 
 async function init() {
