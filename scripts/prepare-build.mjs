@@ -25,6 +25,7 @@ import { copyFileSync, existsSync, mkdirSync, readdirSync, rmSync, writeFileSync
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ensurePatchedLayoutModel, ORIGINAL_NAME, PATCHED_NAME } from './patch-layout.mjs';
+import { ensurePatchedWllama } from './patch-wllama.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const skipModels = process.argv.includes('--skip-models');
@@ -116,6 +117,27 @@ async function stageLayout() {
     console.log(`[prepare-build] staged ${PATCHED_NAME} + inference.yml -> public/models/${LAYOUT_HF_DIR}/`);
 }
 
+function stageWllama() {
+    const dst = join(ROOT, 'public/wllama-patched');
+    const glue = join(dst, 'index.js');
+    const wasm = join(dst, 'wllama.wasm');
+    if (existsSync(glue) && existsSync(wasm)) {
+        console.log('[prepare-build] wllama runtime already staged -> public/wllama-patched/');
+        return;
+    }
+    if (skipModels) {
+        console.warn('[prepare-build] --skip-models: wllama runtime not staged; Deep Read will not run');
+        return;
+    }
+    try {
+        const { wllamaNpm } = ensurePatchedWllama(ROOT);
+        console.log(`[prepare-build] staged patched wllama runtime (@wllama/wllama@${wllamaNpm}) -> public/wllama-patched/`);
+    } catch (err) {
+        console.warn(`[prepare-build] wllama staging skipped: ${err.message}`);
+    }
+}
+
 stageOrt();
 stagePpocrCalibration();
 await stageLayout();
+stageWllama();

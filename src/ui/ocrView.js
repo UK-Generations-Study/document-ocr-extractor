@@ -15,6 +15,7 @@
  */
 import { getDocument, getOcrPagesByDoc, putDocument, putOcrPage } from '../db.js';
 import { enqueueDocument, subscribeQueue } from '../ocr/queue.js';
+import { cancelCurrentDeep, enqueueDeep, subscribeDeepQueue } from '../ocr/deepQueue.js';
 
 const MOUNT_ID = 'work-surface';
 const LOW_CONF_THRESHOLD = 0.6;
@@ -22,19 +23,41 @@ const LOW_CONF_THRESHOLD = 0.6;
 let selectionRef = null;
 let currentDocId = null;
 let unsubQueue = null;
+let unsubDeep = null;
+// Per-doc Deep Read UI progress state, keyed by docId. Not persisted - purely
+// a rendering aid so the sticky bar can show weight download / phase.
+const deepState = new Map();
 
 export function mountOcrView({ selection }) {
     selectionRef = selection;
-    // Redraw whenever the queue emits an event for the currently-visible doc.
     unsubQueue = subscribeQueue((ev) => {
         if (!currentDocId) return;
         if (ev.docId && ev.docId !== currentDocId) return;
-        // Full re-render on document lifecycle events; light re-render on progress.
         if (ev.type === 'doc-done' || ev.type === 'status' || ev.type === 'doc-start') {
             renderFor(currentDocId, { force: true });
         } else if (ev.type === 'page-done' || ev.type === 'page-start' || ev.type === 'load-progress') {
             renderFor(currentDocId, { force: true });
         }
+    });
+    unsubDeep = subscribeDeepQueue((ev) => {
+        // Track load-progress + phase for any doc so we can render on selection.
+        if (ev.type === 'load-progress') {
+            for (const st of deepState.values()) st.load = { loaded: ev.loaded, total: ev.total };
+        }
+        if (ev.docId) {
+            const st = deepState.get(ev.docId) || {};
+            if (ev.type === 'doc-start') st.running = true;
+            if (ev.type === 'page-start') { st.pageIndex = ev.pageIndex; st.pageCount = ev.pageCount; }
+            if (ev.type === 'phase') { st.phase = ev.phase; st.phaseIndex = ev.index; st.phaseTotal = ev.total; }
+            if (ev.type === 'page-done') { /* pageIndex already tracked */ }
+            if (ev.type === 'doc-done') { st.running = false; st.done = true; }
+            if (ev.type === 'error' || ev.type === 'doc-error' || ev.type === 'page-error') {
+                st.error = ev.error?.message || ev.error?.title || String(ev.error);
+                st.running = false;
+            }
+            deepState.set(ev.docId, st);
+        }
+        if (currentDocId) renderFor(currentDocId, { force: true });
     });
     renderFor(selection.getSelected());
     selection.subscribe((id) => renderFor(id));
@@ -96,11 +119,25 @@ async function renderFor(docId, { force } = {}) {
         enqueueDocument(docId);
         renderFor(docId, { force: true });
     });
+    mount.querySelector('#ov-deep')?.addEventListener('click', () => {
+        // First-time click reveals a "downloading model (~1.4 GB)" warning
+        // + Cancel button once weights actually start streaming.
+        const st = deepState.get(docId) || {};
+        st.starting = true;
+        deepState.set(docId, st);
+        enqueueDeep(docId);
+        renderFor(docId, { force: true });
+    });
+    mount.querySelector('#ov-deep-cancel')?.addEventListener('click', () => {
+        cancelCurrentDeep();
+    });
 }
 
 function headerHtml(doc, ocrByKey) {
     const pages = doc.pages || [];
     const donePages = pages.filter((p) => ocrByKey.has(p.blobKey)).length;
+    const anyDeep = Array.from(ocrByKey.values()).some((r) => r.source === 'deep');
+    const deep = deepState.get(doc.id);
 
     let statusLine;
     let controls = '';
@@ -121,7 +158,8 @@ function headerHtml(doc, ocrByKey) {
 <button id="ov-retry" type="button"
     class="rounded-md border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50">
     Re-run OCR
-</button>`;
+</button>
+${deepButtonHtml(anyDeep, deep)}`;
             break;
         case 'ocr-confirmed':
         case 'extraction-running':
@@ -140,15 +178,60 @@ function headerHtml(doc, ocrByKey) {
     }
 
     return `
-<div class="sticky top-0 z-10 -mx-4 px-4 py-2 bg-white/90 backdrop-blur border-b border-gray-200 flex items-center justify-between">
-    <div class="text-xs text-gray-500 truncate">
-        ${escapeHtml(doc.name)}
+<div class="sticky top-0 z-10 -mx-4 px-4 py-2 bg-white/90 backdrop-blur border-b border-gray-200 flex flex-col gap-1">
+    <div class="flex items-center justify-between">
+        <div class="text-xs text-gray-500 truncate">
+            ${escapeHtml(doc.name)}
+        </div>
+        <div class="flex items-center gap-2">
+            ${statusLine}
+            ${controls}
+        </div>
     </div>
-    <div class="flex items-center gap-2">
-        ${statusLine}
-        ${controls}
-    </div>
+    ${deepProgressBarHtml(deep)}
 </div>`;
+}
+
+function deepButtonHtml(anyDeep, st) {
+    if (st?.running) {
+        const label = st.phase === 'cross-examining' && st.phaseIndex
+            ? `Deep OCR: region ${st.phaseIndex}/${st.phaseTotal}`
+            : st.phase
+                ? `Deep OCR: ${st.phase}${typeof st.pageIndex === 'number' ? ` (page ${st.pageIndex + 1}/${st.pageCount})` : ''}`
+                : 'Deep OCR running&hellip;';
+        return `
+<span class="text-xs text-purple-700">${label}</span>
+<button id="ov-deep-cancel" type="button"
+    class="rounded-md border border-gray-300 bg-white px-2 py-1 text-[11px] font-medium text-gray-700 hover:bg-gray-50">
+    Cancel
+</button>`;
+    }
+    if (st?.starting && !st?.done) {
+        const p = st.load;
+        const pct = p && p.total > 0 ? Math.min(100, Math.round((p.loaded / p.total) * 100)) : 0;
+        return `
+<span class="text-xs text-purple-700">Downloading Deep OCR model${pct ? ` &middot; ${pct}%` : '&hellip;'}</span>`;
+    }
+    const label = anyDeep ? 'Re-run Deep OCR' : 'Improve with Deep OCR';
+    return `
+<button id="ov-deep" type="button"
+    class="rounded-md border border-purple-300 bg-purple-50 px-3 py-1.5 text-xs font-medium text-purple-800 hover:bg-purple-100"
+    title="Run the higher-quality VLM (~1.4 GB one-time download, cached after)">
+    ${label}
+</button>`;
+}
+
+function deepProgressBarHtml(st) {
+    if (!st) return '';
+    if (st.running && typeof st.pageIndex === 'number') {
+        const pct = st.pageCount ? Math.round(((st.pageIndex + 0.5) / st.pageCount) * 100) : 0;
+        return `<div class="w-full h-1 bg-gray-200 rounded overflow-hidden"><div class="h-full bg-purple-600 transition-all" style="width:${pct}%"></div></div>`;
+    }
+    if (st.starting && !st.done && st.load) {
+        const pct = st.load.total > 0 ? Math.round((st.load.loaded / st.load.total) * 100) : 0;
+        return `<div class="w-full h-1 bg-gray-200 rounded overflow-hidden"><div class="h-full bg-purple-500 transition-all" style="width:${pct}%"></div></div>`;
+    }
+    return '';
 }
 
 function pageSectionEl(doc, pageIndex, page, ocr) {
@@ -159,6 +242,11 @@ function pageSectionEl(doc, pageIndex, page, ocr) {
     const lowConfBadge = lowConf > 0
         ? `<span class="ml-2 inline-flex items-center rounded bg-yellow-50 text-yellow-800 ring-1 ring-inset ring-yellow-300 px-1.5 py-0.5 text-[10px]">${lowConf} low-conf line${lowConf === 1 ? '' : 's'}</span>`
         : '';
+    const sourceBadge = ocr?.source === 'deep'
+        ? `<span class="ml-2 inline-flex items-center rounded bg-purple-50 text-purple-800 ring-1 ring-inset ring-purple-300 px-1.5 py-0.5 text-[10px]">deep</span>`
+        : ocr?.source === 'edit'
+            ? `<span class="ml-2 inline-flex items-center rounded bg-gray-100 text-gray-700 ring-1 ring-inset ring-gray-300 px-1.5 py-0.5 text-[10px]">edited</span>`
+            : '';
 
     const readonly = ['ocr-confirmed', 'extraction-running', 'extraction-done', 'confirmed', 'exported'].includes(doc.status);
     const initial = ocr?.markdown ?? '';
@@ -166,7 +254,7 @@ function pageSectionEl(doc, pageIndex, page, ocr) {
 
     wrap.innerHTML = `
 <div class="flex items-baseline justify-between px-3 py-1.5 border-b border-gray-100 text-xs text-gray-600">
-    <div>Page ${pageIndex + 1}${lowConfBadge}</div>
+    <div>Page ${pageIndex + 1}${sourceBadge}${lowConfBadge}</div>
     <div class="text-gray-400">${page.width} x ${page.height}</div>
 </div>
 <textarea
