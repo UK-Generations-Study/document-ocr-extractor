@@ -1,21 +1,35 @@
 {
+  "$id": "https://github.com/jeyabbalas/medical-report-information-extractor/tree/main/examples/bcn_generations_pathology_data/config/schemas/tnmStaging.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TNM staging schema",
+  "description": "Schema for AJCC TNM staging (T stage, N stage, M stage) extracted from breast cancer pathology reports.",
   "type": "object",
+  "required": ["tStage", "nStage", "mStage"],
+  "x-version": "1.0.0",
+  "x-provenance": {
+    "x-lastModified": "2026-07-01",
+    "x-repository": "https://github.com/jeyabbalas/medical-report-information-extractor",
+    "x-maintainer": "Medical Report Information Extractor"
+  },
+  "x-primaryKey": ["fileName"],
   "properties": {
     "tStage": {
       "description": "Determine if the report explicitly assigns a tumour stage (T stage) from the AJCC TNM staging system. The T stage can be any of the following: 'TX', 'T0', 'Tis', 'T1', 'T1mi', 'T1a', 'T1b', 'T1c', 'T2', 'T3', 'T4', 'T4a', 'T4b', 'T4c', 'T4d'. It may optionally be prefixed by 'c' to indicate clinical staging (e.g., 'cT1', 'cT1b', 'cT3', etc.) or 'p' to indicate pathological staging (e.g., 'pTis', 'pT1c', 'pT2', etc.). It may also optionally be prefixed by 'y' to indicate post-therapy staging (e.g., 'ypT1a', 'ypT4', etc.). It may optionally be suffixed by '(m)' to indicate multiple primary tumours (e.g., 'pT1(m)', 'ypT3(m)', etc.) or '(mic)' for microinvasion (e.g., 'pT1c(mic)', 'ypT1(mic)', etc.). Extract the T stage specified in the report, and assign to this variable the most appropriate T stage that is consistent with the described pattern. Format the extracted string, if necessary. Assign null: if no T stage is explicitly assigned by the pathologist in the report. Note 1: If the pathologist does not assign a T stage, do not infer it on your own; simply assign null instead. Note 2: Expect the report to contain typographical errors from OCR and always conform to the list of possible T stages given here. Note 3: Sometimes tubule formation scores (for grading) may seem similar to some of the T stages (T1, T2, T3), in which case ignore them because grades are not the same as stages. Grading is often written in TPM triplets e.g. (T3, P2, M1). Ignore grades.",
       "type": ["string", "null"],
-      "pattern": "^(y)?(c|p)?(TX|T0|Tis|T1|T1mi|T1a|T1b|T1c|T2|T3|T4|T4a|T4b|T4c|T4d)(\\(m\\)|\\(mic\\))?$"
+      "pattern": "^(y)?(c|p)?(TX|T0|Tis|T1|T1mi|T1a|T1b|T1c|T2|T3|T4|T4a|T4b|T4c|T4d)(\\(m\\)|\\(mic\\))?$",
+      "x-description": "AJCC TNM staging system. Prefix c = clinical stage, p = pathological or surgical stage. Prefix y = post-therapy. Suffix (m) = multiple primary tumours; suffix (mic) = microinvasion."
     },
     "nStage": {
       "description": "Determine if the report explicitly assigns a regional lymph node stage (N stage) from the AJCC TNM staging system. The N stage can be any of the following: 'NX', 'N0', 'N1', 'N1mi', 'N1a', 'N1b', 'N1c', 'N2', 'N2a', 'N2b', 'N3', 'N3a', 'N3b', 'N3c'. It may optionally be prefixed by 'c' to indicate clinical staging (e.g., 'cN1', 'cN2b', 'cNX', etc.) or 'p' to indicate pathological staging (e.g., 'pN0', 'pN1a', 'pN3', etc.). It may also optionally be prefixed by 'y' to indicate post-therapy staging (e.g., 'ypN0', 'ypN1', etc.). It may also optionally be suffixed by '(sn)' to indicate sentinel node biopsy (e.g., 'pN0(sn)', 'pN1(sn)', etc.) or '(OSNA)' for one-step nucleic acid amplification (e.g., 'pN0(OSNA)', 'pN2a(OSNA)', etc.). Extract the N stage specified in the report, and assign to this variable the most appropriate N stage that is consistent with the described pattern. Format the extracted string, if necessary. Assign null: if no N stage is explicitly assigned by the pathologist in the report. Note 1: If the pathologist does not assign an N stage, do not infer it on your own; simply assign null instead. Note 2: Expect the report to contain typographical errors from OCR and always conform to the list of possible N stages given here. Note 3: Sometimes nuclear pleomorphism scores (for grading) may seem similar to some of the N stages (N1, N2, N3), in which case ignore them because grades are not the same as stages. Grading is often written in ANM triplets e.g. '(A3, N2, M1)'. Ignore grades.",
       "type": ["string", "null"],
-      "pattern": "^(y)?(c|p)?(NX|N0|N1|N1mi|N1a|N1b|N1c|N2|N2a|N2b|N3|N3a|N3b|N3c)(\\(sn\\)|\\(OSNA\\))?$"
+      "pattern": "^(y)?(c|p)?(NX|N0|N1|N1mi|N1a|N1b|N1c|N2|N2a|N2b|N3|N3a|N3b|N3c)(\\(sn\\)|\\(OSNA\\))?$",
+      "x-description": "AJCC TNM staging system. Prefix c = clinical stage, p = pathological or surgical stage. Prefix y = post-therapy. Suffix (sn) = sentinel lymph node metastasis; suffix (OSNA) = one-step nucleic acid amplification."
     },
     "mStage": {
       "description": "Determine if the report explicitly assigns a distant metastasis stage (M stage) from the AJCC TNM staging system. The M stage can be any of the following: 'MX', 'M0', 'M0(i+)', 'M1'. It may optionally be prefixed by 'c' to indicate clinical staging (e.g., 'cMX', 'cM0', 'cM1', etc.) or 'p' to indicate pathological staging (e.g., 'pMX', 'pM0', 'pM1', etc.). Extract the M stage specified in the report, and assign to this variable the most appropriate M stage that is consistent with the described pattern. Format the extracted string, if necessary. if no M stage is explicitly assigned by the pathologist in the report. Note 1: If the pathologist does not assign an M stage, do not infer it on your own; simply assign null instead. Note 2: Expect the report to contain typographical errors from OCR and always conform to the list of possible M stages given here. Note 3: Sometimes mitotic count scores (for grading) may seem similar to an M stage (M1), in which case ignore them because grades are not the same as stages. Grading is often written in ANM or TPM triplets e.g. '(A3, N2, M1)' or '(T3, P2, M1)'. Ignore grades.",
       "type": ["string", "null"],
-      "pattern": "^(c|p)?(MX|M0|M0\\(i\\+\\)|M1)$"
+      "pattern": "^(c|p)?(MX|M0|M0\\(i\\+\\)|M1)$",
+      "x-description": "AJCC TNM staging system. Prefix c = clinical assessment data (examination, imaging, endoscopy); p = pathological data (histopathologic examination of tissue sample)."
     }
-  },
-  "required": ["tStage", "nStage", "mStage"]
+  }
 }

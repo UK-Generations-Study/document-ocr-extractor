@@ -1,5 +1,17 @@
 {
+  "$id": "https://github.com/jeyabbalas/medical-report-information-extractor/tree/main/examples/bcn_generations_pathology_data/config/schemas/grading.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Tumour grading schema",
+  "description": "Schema for invasive carcinoma grade, component scores (tubules, nuclear pleomorphism, mitotic activity), and DCIS grade extracted from breast cancer pathology reports.",
   "type": "object",
+  "required": ["invasiveGrade", "tubulesScore", "nuclearPleomorphismScore", "mitoticActivityScore", "dcisGrade"],
+  "x-version": "1.0.0",
+  "x-provenance": {
+    "x-lastModified": "2026-07-01",
+    "x-repository": "https://github.com/jeyabbalas/medical-report-information-extractor",
+    "x-maintainer": "Medical Report Information Extractor"
+  },
+  "x-primaryKey": ["fileName"],
   "properties": {
     "invasiveGrade": {
       "description": "Determine if the report assigns an integer grade for invasive carcinoma, if detected in the patient. The integer grade can either be 1, 2, or 3. It may sometimes be represented as roman numerals— I, II, or III— in which case, convert them into the corresponding integer grade (1, 2, and 3, respectively) when you assign a value for this variable. If you notice typographical or sentence alignment errors due to erratic optical character recognition, use your judgement from the context. Assign null: if no integer grade was assigned in the report for invasive carcinoma.",
@@ -25,7 +37,7 @@
       "description": "Determine if the report describes the (nuclear) grade of ductal carcinoma in situ (DCIS), if detected in the patient.",
       "type": ["string", "null"],
       "enum": ["L", "IL", "I", "HI", "H", null],
-      "enumDescriptions": [
+      "x-enumDescriptions": [
         "Assign 'L': if the report specifies a low grade DCIS.",
         "Assign 'IL': if the report specifies an intermediate and low grade DCIS.",
         "Assign 'I': if the report specifies an intermediate grade DCIS.",
@@ -34,6 +46,5 @@
         "Assign null: if the DCIS grade was not described in the report."
       ]
     }
-  },
-  "required": ["invasiveGrade", "tubulesScore", "nuclearPleomorphismScore", "mitoticActivityScore", "dcisGrade"]
+  }
 }

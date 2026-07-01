@@ -1,18 +1,32 @@
 {
+  "$id": "https://github.com/jeyabbalas/medical-report-information-extractor/tree/main/examples/bcn_generations_pathology_data/config/schemas/tumourSize.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Tumour size schema",
+  "description": "Schema for tumour sizes (whole tumour, DCIS-only component, invasive component) in millimetres extracted from breast cancer pathology reports.",
   "type": "object",
+  "required": ["sizeWholeTumour", "sizeDcisOnly", "sizeInvasiveTumour"],
+  "x-version": "1.0.0",
+  "x-provenance": {
+    "x-lastModified": "2026-07-01",
+    "x-repository": "https://github.com/jeyabbalas/medical-report-information-extractor",
+    "x-maintainer": "Medical Report Information Extractor"
+  },
+  "x-primaryKey": ["fileName"],
   "properties": {
     "sizeWholeTumour": {
       "description": "If the size (in mm) of the whole tumour is specified in the report, assign the value to this variable. Otherwise, assign null. Note: ignore sizes of individual foci; only report the size of the whole tumour, if reported. Otherwise, assign null.",
-      "type": ["number", "null"]
+      "type": ["number", "null"],
+      "x-unit": "millimetres"
     },
     "sizeDcisOnly": {
       "description": "If the size (in mm) of the ductal carcinoma in situ (DCIS) component of the tumour is specified in the report, assign the value to this variable. Otherwise, assign null.",
-      "type": ["number", "null"]
+      "type": ["number", "null"],
+      "x-unit": "millimetres"
     },
     "sizeInvasiveTumour": {
       "description": "If the size (in mm) of the invasive tumour component of the tumour is specified in the report, assign the value to this variable. Otherwise, assign null.",
-      "type": ["number", "null"]
+      "type": ["number", "null"],
+      "x-unit": "millimetres"
     }
-  },
-  "required": ["sizeWholeTumour", "sizeDcisOnly", "sizeInvasiveTumour"]
+  }
 }

@@ -1,20 +1,32 @@
 {
+  "$id": "https://github.com/jeyabbalas/medical-report-information-extractor/tree/main/examples/bcn_generations_pathology_data/config/schemas/excision.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Excision margin schema",
+  "description": "Schema for excision margin variables extracted from breast cancer pathology reports.",
   "type": "object",
+  "required": ["closestRelevantMargin", "excisionMargin"],
+  "x-version": "1.0.0",
+  "x-provenance": {
+    "x-lastModified": "2026-07-01",
+    "x-repository": "https://github.com/jeyabbalas/medical-report-information-extractor",
+    "x-maintainer": "Medical Report Information Extractor"
+  },
+  "x-primaryKey": ["fileName"],
   "properties": {
     "closestRelevantMargin": {
       "description": "Determine if the pathology report lists the distances to the relevant margins (in mm) in the excision. They are typically measured from different anatomical directions such as— anterior, posterior, medial, lateral, inferior, superior, etc. The closest relevant margin is the shortest distance associated with any margin, regardless of its anatomical direction. Extract the closest relevant margin and assign the value to this variable. Assign null: if the pathology report does not list the distances to the relevant margins in the excision. Note 1: If the closest margin is imprecisely reported as 'less than 1mm' (or <1mm), assign 0.9. This rule only applies if the reported value is less than 1 and no value other than 1. Note 2: If the report contains a section summarizing the different margins, the information contained here takes precedence over information reported elsewhere in the report. Note 3: If the pathologist explicitly states the closest relevant margin, the value there should take precedence over all other margin information in the report. Note 4: If the pathologist mentions that the tumour reaches relevant margins, assign null. Note 5: If the closest relevant margin is 0mm, assign null.",
-      "type": ["number", "null"]
+      "type": ["number", "null"],
+      "x-unit": "millimetres"
     },
     "excisionMargin": {
       "description": "If the pathologist mentions that the tumour reaches (or does not reach) the relevant margin in the excision, assign the appropriate value from the enum list below.",
       "type": ["string", "null"],
       "enum": ["RRM", "NRM", null],
-      "enumDescriptions": [
+      "x-enumDescriptions": [
         "Assign 'RRM': if the report explicitly mentions that the tumour reaches the relevant margin in the excision.",
         "Assign 'NRM': if the report explicitly mentions that the tumour does not reach the relevant margin in the excision. Note: If the pathologist does not explicitly state if the tumour reaches relevant margin but the value of 'closestRelevantMargin' is not null, assign 'NRM'.",
         "Assign null: if the pathology report does not mention anything about the tumour reaching the relevant margins in the excision and neither 'RRM' nor 'NRM' is applicable."
       ]
     }
-  },
-  "required": ["closestRelevantMargin", "excisionMargin"]
+  }
 }

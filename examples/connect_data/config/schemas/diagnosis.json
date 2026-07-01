@@ -1,5 +1,17 @@
 {
+  "$id": "https://github.com/jeyabbalas/medical-report-information-extractor/tree/main/examples/connect_data/config/schemas/diagnosis.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Cervical diagnosis schema",
+  "description": "Schema for the single most severe cervical diagnosis explicitly stated by the pathologist, extracted from cervical cancer pathology reports.",
   "type": "object",
+  "required": ["diagnosis"],
+  "x-version": "1.0.0",
+  "x-provenance": {
+    "x-lastModified": "2026-07-01",
+    "x-repository": "https://github.com/jeyabbalas/medical-report-information-extractor",
+    "x-maintainer": "Medical Report Information Extractor"
+  },
+  "x-primaryKey": ["fileName"],
   "properties": {
     "diagnosis": {
       "description": "Read the pathology report summary and record the **single MOST SEVERE cervical diagnosis explicitly stated by the pathologist**. Use the following hierarchy when multiple lesions are mentioned in the same specimen: 1. Invasive cancers ('SQ' > 'AD'); 2. Glandular in‑situ lesion ('AIS'); 3. High‑grade squamous intraepithelial lesions ('CIN3' > 'CIN2/3' > 'CIN2'); 4. Low‑grade squamous intraepithelial lesion ('CIN1'); 5. Normal/negative findings ('Normal'). **Do NOT infer** a category that is not written; choose based only on words that actually appear. Ignore comments about margins, ECC, endometrial curettage, HPV typing, or immunostains unless the core diagnostic words are present. When a phrase could map to more than one category, pick the **more severe** one (e.g., “HSIL, cannot exclude invasion” → 'SQ'). If the summary says “no residual dysplasia” or “regressed lesion,” treat as the less‑severe category that remains documented (often “Normal”).",
@@ -14,7 +26,7 @@
         "SQ",
         "AD"
       ],
-      "enumDescriptions": [
+      "x-enumDescriptions": [
         "Assign 'Normal': For Normal / Negative for intraepithelial lesion or malignancy (NILM). Look for: 'negative', 'benign cervix', 'no dysplasia', 'reactive changes only', 'normal squamous mucosa'. Edge cases: If the summary lists only benign findings such as inflammation, nabothian cysts, or polyp, still choose 'Normal'.",
         "Assign 'CIN1': For CIN1 / Low‑grade Squamous Intraepithelial Lesion – LSIL. Key words: 'CIN1', 'LSIL', 'mild dysplasia', 'HPV effect', 'koilocytosis'. Edge cases: If the report says 'low‑grade' without a grade number, treat as CIN1.",
         "Assign 'CIN2': For CIN2 / High‑grade Squamous Intraepithelial Lesion – HSIL. Key words: 'CIN2', 'HSIL, grade2', 'moderate dysplasia'. Edge cases: If only 'HSIL' is written with no grade and no suggestion of grade 3, default to 'CIN2'.",
@@ -25,6 +37,5 @@
         "Assign 'AD': For AD (Invasive Adenocarcinoma). Key words: 'adenocarcinoma', 'invasive endocervical adenocarcinoma', 'adenosquamous carcinoma' (if predominantly glandular), 'minimal deviation adenocarcinoma (MDA)'. Edge cases: If both invasive squamous and invasive adenocarcinoma are documented, record whichever histology the pathologist labels as primary; if unclear, default to 'AD' because mixed lesions usually follow the glandular component."
       ]
     }
-  },
-  "required": ["diagnosis"]
+  }
 }

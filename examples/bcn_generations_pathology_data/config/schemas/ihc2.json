@@ -1,5 +1,17 @@
 {
+  "$id": "https://github.com/jeyabbalas/medical-report-information-extractor/tree/main/examples/bcn_generations_pathology_data/config/schemas/ihc2.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Immunohistochemistry (HER2 and Ki67) schema",
+  "description": "Schema for HER2 IHC score, HER2 status, HER2 FISH/ISH result, and Ki67 proliferation index extracted from breast cancer pathology reports.",
   "type": "object",
+  "required": ["her2IhcScore", "her2Status", "her2FISH", "ki67"],
+  "x-version": "1.0.0",
+  "x-provenance": {
+    "x-lastModified": "2026-07-01",
+    "x-repository": "https://github.com/jeyabbalas/medical-report-information-extractor",
+    "x-maintainer": "Medical Report Information Extractor"
+  },
+  "x-primaryKey": ["fileName"],
   "properties": {
     "her2IhcScore": {
       "description": "If the pathology report specifies a immunohistochemistry (IHC) score to determine the HER2 status, extract and assign the value to this variable. The IHC score is typically reported as 0, 1+, 2+, or 3+. The same scores may sometimes be represented as fractions, such as 0/3, 1/3, 2/3, and 3/3. In this case, map them to the corresponding values from the enum list i.e., 0, 1+, 2+, and 3+, respectively, before assigning it to this variable. The score may sometimes be represented using a shorthand notation, such as '+++' to indicate a score of 3+. Here again, map them to the corresponding value in the enum list. Assign null: if the HER2 IHC score is not specified in the report or if the report mentions that the HER2 IHC test is not applicable (N/A) to the patient. Note 1: expect typographical errors and sentence alignment errors typical in documents generated using optical character recognition. For example, a HER2 IHC score of 9 is unlikely and should be interpreted as the similar looking 0. Note 2: if multiple HER2 IHC scores are specified in the report, the score in the conclusion section should be preferred.",
@@ -10,7 +22,7 @@
       "description": "If the pathology report specifies the HER2 status, extract and assign the value to this variable. In the unusual event where a HER2 IHC score is specified in the report but the HER2 status is not specified, map the value of the HER2 IHC score to the corresponding HER2 status as follows: 0 -> 'N', 1+ -> 'N', 2+ -> 'B', 3+ -> 'P'. Note 1: expect typographical errors and sentence alignment errors typical in documents generated using optical character recognition. Note 2: if multiple HER2 statuses are specified in the report, the status specified in the conclusion section should be preferred.",
       "type": ["string", "null"],
       "enum": ["N", "B", "P", "NP", null],
-      "enumDescriptions": [
+      "x-enumDescriptions": [
         "Assign 'N': if the HER2 status is specified as Negative in the report.",
         "Assign 'B': if the HER2 status is specified as Borderline in the report.",
         "Assign 'P': if the HER2 status is specified as Positive in the report.",
@@ -22,7 +34,7 @@
       "description": "If the pathology report specifies results from a fluorescence in situ hybridization (FISH) test or In situ hybridization (ISH) test to determine the HER2 status, extract the result and assign the value to this variable. Assign null: if the HER2 FISH test is not specified in the report. Note 1: if a FISH/ISH test is recommended for the future and no results from the FISH/ISH test was mentioned in the current report, ignore it and assign null to this variable. Note 2: expect typographical errors and sentence alignment errors typical in documents generated using optical character recognition. Note 2: if multiple HER2 FISH/ISH test results are specified in the report, the result in the conclusion section should be preferred.",
       "type": ["string", "null"],
       "enum": ["A", "N", "P", "NEG", "NP", null],
-      "enumDescriptions": [
+      "x-enumDescriptions": [
         "Assign 'A': if the HER2 FISH/ISH test result/significance is described as Amplified in the report.",
         "Assign 'N': if the HER2 FISH/ISH test result/significance is described as Non-Amplified in the report.",
         "Assign 'P': if the HER2 FISH/ISH test result/significance is described as Positive in the report.",
@@ -33,8 +45,8 @@
     },
     "ki67": {
       "description": "If the pathology report specifies a Ki67 score (percentage of positive nuclei), extract and assign the value to this variable. Assign null: if the Ki67 score is not specified in the report. Note 1: Since this value is an indicator of cell proliferation, it may be described along lines similar to— 'percent cells that are in cell cycle', 'percent cells proliferating', or 'proliferation index'. Note 2: If a range of values is specified (e.g. 20-30), assign the upper-bound value (e.g. 30).",
-      "type": ["number", "null"]
+      "type": ["number", "null"],
+      "x-unit": "%"
     }
-  },
-  "required": ["her2IhcScore", "her2Status", "her2FISH", "ki67"]
+  }
 }

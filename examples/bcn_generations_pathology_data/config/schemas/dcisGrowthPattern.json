@@ -1,5 +1,17 @@
 {
+  "$id": "https://github.com/jeyabbalas/medical-report-information-extractor/tree/main/examples/bcn_generations_pathology_data/config/schemas/dcisGrowthPattern.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "DCIS growth pattern schema",
+  "description": "Schema for ductal carcinoma in situ (DCIS) growth patterns (solid, cribriform, micropapillary, papillary, apocrine, flat, comedo, clinging) and comedonecrosis extent extracted from breast cancer pathology reports.",
   "type": "object",
+  "required": ["solidDCISGP", "cribriformDCISGP", "micropapillaryDCISGP", "papillaryDCISGP", "apocrineDCISGP", "flatDCISGP", "comedoDCISGP", "clingingDCISGP", "comedonecrosisExtent"],
+  "x-version": "1.0.0",
+  "x-provenance": {
+    "x-lastModified": "2026-07-01",
+    "x-repository": "https://github.com/jeyabbalas/medical-report-information-extractor",
+    "x-maintainer": "Medical Report Information Extractor"
+  },
+  "x-primaryKey": ["fileName"],
   "properties": {
     "solidDCISGP": {
       "description": "Determine if ductal carcinoma in situ (DCIS) growth patterns (architecture) are described in the report. Assign true: if the DCIS growth pattern is described as solid. Assign false: otherwise.",
@@ -37,7 +49,7 @@
       "description": "Determine if the the report contains information on comedo necrosis in ductal carcinoma in situ (DCIS).",
       "type": ["string", "null"],
       "enum": ["Y", "N", "Mil", "Mod", "Mar", null],
-      "enumDescriptions": [
+      "x-enumDescriptions": [
         "Assign 'Y': if the report specifies that comedo necrosis is present in DCIS but the extent is not specified.",
         "Assign 'N': if the report explicitly specifies that comedo necrosis is not present in DCIS.",
         "Assign 'Mil': if the report specifies that comedo necrosis is present in DCIS and the extent is mild.",
@@ -46,6 +58,5 @@
         "Assign null: if the report does not contain information on comedo necrosis in DCIS."
       ]
     }
-  },
-  "required": ["solidDCISGP", "cribriformDCISGP", "micropapillaryDCISGP", "papillaryDCISGP", "apocrineDCISGP", "flatDCISGP", "comedoDCISGP", "clingingDCISGP", "comedonecrosisExtent"]
+  }
 }

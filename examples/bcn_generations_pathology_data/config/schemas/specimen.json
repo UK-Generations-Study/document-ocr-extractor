@@ -1,11 +1,23 @@
 {
+  "$id": "https://github.com/jeyabbalas/medical-report-information-extractor/tree/main/examples/bcn_generations_pathology_data/config/schemas/specimen.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Specimen schema",
+  "description": "Schema for specimen laterality, screen detection, specimen type, specimen weight, and neoadjuvant therapy status extracted from breast cancer pathology reports.",
   "type": "object",
+  "required": ["side", "screenDetected", "specimenType", "specimenWeight", "postNeoadjuvantChemo"],
+  "x-version": "1.0.0",
+  "x-provenance": {
+    "x-lastModified": "2026-07-01",
+    "x-repository": "https://github.com/jeyabbalas/medical-report-information-extractor",
+    "x-maintainer": "Medical Report Information Extractor"
+  },
+  "x-primaryKey": ["fileName"],
   "properties": {
     "side": {
       "description": "The laterality of the breast from which the main tissue specimen was collected. The information in the pathology report is in reference to this specimen.",
       "type": ["string", "null"],
       "enum": ["L", "R", null],
-      "enumDescriptions": [
+      "x-enumDescriptions": [
         "Assign 'L': if the specimen was collected from the left breast.",
         "Assign 'R': if the specimen was collected from the right breast.",
         "Assign null: if the laterality of the specimen is not known or if the information is missing in the report."
@@ -15,7 +27,7 @@
       "description": "Determine if the pathology report mentions if the tumour/abnormality was detected through cancer screening.",
       "type": ["string", "null"],
       "enum": ["Y", "N", null],
-      "enumDescriptions": [
+      "x-enumDescriptions": [
         "Assign 'Y': if the report mentions that the tumour/abnormality was detected through cancer screening.",
         "Assign 'N': if the report explicitly mentions that the tumour/abnormality was not detected through cancer screening.",
         "Assign null: if the method of detection is not known or there is no information in the report regarding the tumour/abnormality detection method."
@@ -25,7 +37,7 @@
       "description": "Determine the surgical procedure used to obtain the main tissue specimen described in the pathology report. Assign the most appropriate code based on the information provided in the report.",
       "type": ["string", "null"],
       "enum": ["WBB", "WLE", "M", "NBO", "OB", "Re-ex", "SE", "TMP", "FNA", "LB", null],
-      "enumDescriptions": [
+      "x-enumDescriptions": [
         "Assign 'WBB': if Wide Bore Needle Biopsy (also called Core Biopsy or Mammotome Biopsy) was performed.",
         "Assign 'WLE': if Wide Local Excision was performed.",
         "Assign 'M': if Mastectomy was performed.",
@@ -41,18 +53,18 @@
     },
     "specimenWeight": {
       "description": "The weight in grams (g) of the primary biopsied/excised/resected tissue specimen described and analyzed in the report. If multiple specimens are mentioned, only report the weight of the primary specimen, while ignoring the weights of node biopsies or specimen derived from the primary tissue specimen. Assign null: if the information regarding the primary specimen weight is missing in the report.",
-      "type": ["number", "null"]
+      "type": ["number", "null"],
+      "x-unit": "grams"
     },
     "postNeoadjuvantChemo": {
       "description": "If the report mentions that the patient received a type of neoadjuvant treatment prior to the specimen being taken, extract the information on the type of treatment the patient received.",
       "type": ["string", "null"],
       "enum": ["C", "E", null],
-      "enumDescriptions": [
+      "x-enumDescriptions": [
         "Assign 'C': if the report explicitly mentions that the patient received chemotherapy.",
         "Assign 'E': if the report explicitly mentions that the patient received endocrine therapy.",
         "Assign null: if the report does not contain any information on neoadjuvant therapy status."
       ]
     }
-  },
-  "required": ["side", "screenDetected", "specimenType", "specimenWeight", "postNeoadjuvantChemo"]
+  }
 }

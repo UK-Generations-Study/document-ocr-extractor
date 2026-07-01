@@ -1,11 +1,23 @@
 {
+  "$id": "https://github.com/jeyabbalas/medical-report-information-extractor/tree/main/examples/bcn_generations_pathology_data/config/schemas/invasiveCarcinomaType.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Invasive carcinoma type schema",
+  "description": "Schema for invasive carcinoma type, pure special type (PST) subtype, and tumour extent extracted from breast cancer pathology reports.",
   "type": "object",
+  "required": ["invasiveCarcinomaType", "invasiveCarcinomaPSTSubtype", "tumourExtent"],
+  "x-version": "1.0.0",
+  "x-provenance": {
+    "x-lastModified": "2026-07-01",
+    "x-repository": "https://github.com/jeyabbalas/medical-report-information-extractor",
+    "x-maintainer": "Medical Report Information Extractor"
+  },
+  "x-primaryKey": ["fileName"],
   "properties": {
     "invasiveCarcinomaType": {
       "description": "If the report mentions the presence of invasive carcinoma, determine if the report also specifies the type of invasive carcinoma. If the type is specified, select and assign the most representative option from the enum list for this variable.",
       "type": ["string", "null"],
       "enum": ["NST", "PST", "MTT", "MIX", "OTH", null],
-      "enumDescriptions": [
+      "x-enumDescriptions": [
         "Assign 'NST': if the invasive carcinoma type is specified as of 'No Special Type' (NST). When there is no mixed tumour component, invasive/infiltrating ductal carcinoma (IDC) implies No Special Type.",
         "Assign 'PST': if the invasive carcinoma type is specified as of 'Pure Special Type'. When there is no mixed tumour component and the tumour type is not described as type other, a single invasive component such as— only invasive lobular carcinoma (ILC), only invasive tubular carcinoma, only invasive cribriform carcinoma, only invasive mucinous carcinoma, only papillary carcinoma, only medullary breast cancer, etc.— each imply that the invasive carcinoma is of Pure Special Type.",
         "Assign 'MTT': if the invasive carcinoma type is specified as of 'Mixed' type, and the mixed components were specifically ductal (NST) and lobular.",
@@ -17,8 +29,8 @@
     "invasiveCarcinomaPSTSubtype": {
       "description": "If the report specifies the invasive carcinoma type as Pure Special Type (PST), determine if the report also specifies the type of the component of the Pure Special Type. If the component type is specified, select and assign the most representative option from the enum list for this variable.",
       "type": ["string", "null"],
-      "enum": ["Lob","Pap", "Tub", "Crb", "Muc", "Med", null],
-      "enumDescriptions": [
+      "enum": ["Lob", "Pap", "Tub", "Crb", "Muc", "Med", null],
+      "x-enumDescriptions": [
         "Assign 'Lob': if the invasive carcinoma type is specified as 'Pure Special Type' and the component type is specified as 'Lobular'.",
         "Assign 'Pap': if the invasive carcinoma type is specified as 'Pure Special Type' and the component type is specified as 'Papillary'.",
         "Assign 'Tub': if the invasive carcinoma type is specified as 'Pure Special Type' and the component type is specified as 'Tubular'.",
@@ -32,13 +44,12 @@
       "description": "Determine if the report specifies the tumour extent. Note: if the pathologist does not explicitly describe the tumour as one of the enum options, do not try to infer it on your own.",
       "type": ["string", "null"],
       "enum": ["LOC", "MIF", "UNI", null],
-      "enumDescriptions": [
+      "x-enumDescriptions": [
         "Assign 'LOC': if the tumour extent is explicitly described as 'Localised' in the report.",
         "Assign 'MIF': if the tumour extent is explicitly described as 'Multifocal' (or Multiple foci, Multi invasive foci, etc.) in the report.",
         "Assign 'UNI': if the tumour extent is explicitly described as 'Unifocal' in the report. Note: if the report only mentions that the tumour is not multifocal, do not assume that it is unifocal unless explicitly stated as unifocal. Presence of a single tumour also does not imply that the tumour is unifocal unless explicitly stated as unifocal.",
         "Assign null: if the tumour extent is not explicitly specified in the report."
       ]
     }
-  },
-  "required": ["invasiveCarcinomaType", "invasiveCarcinomaPSTSubtype", "tumourExtent"]
+  }
 }

@@ -1,11 +1,23 @@
 {
+  "$id": "https://github.com/jeyabbalas/medical-report-information-extractor/tree/main/examples/bcn_generations_pathology_data/config/schemas/ihc1.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Immunohistochemistry (ER and PR) schema",
+  "description": "Schema for oestrogen receptor (ER) and progesterone receptor (PR) status and score types extracted from breast cancer pathology reports.",
   "type": "object",
+  "required": ["erScoreType", "erStatus", "prScoreType", "prStatus"],
+  "x-version": "1.0.0",
+  "x-provenance": {
+    "x-lastModified": "2026-07-01",
+    "x-repository": "https://github.com/jeyabbalas/medical-report-information-extractor",
+    "x-maintainer": "Medical Report Information Extractor"
+  },
+  "x-primaryKey": ["fileName"],
   "properties": {
     "erScoreType": {
       "description": "If the pathology report specifies a immunohistochemistry test score for oestrogen receptor (ER) status, determine the type of score that is being reported.",
       "type": ["string", "null"],
       "enum": ["QS", "IP", "MD", "I", "P", null],
-      "enumDescriptions": [
+      "x-enumDescriptions": [
         "Assign 'QS': if the report mentions that it is reporting an Allred score or a quick score (QS) for ER status. Its value ranges from 0-8. Note 1: if the score for ER status is reported as a fraction out of 8 without mentioning the score type (e.g. 7/8) assume that it is reporting an Allred score, and assign 'QS'. Note 2: if the score for ER status is reported as an integer, the integer is between 0 and 8, and the report does not specify any of the ER score types listed here, assume that it is reporting an Allred score and assign 'QS'. Note 3: if a quick/Allred score is being reported in conjunction with other component scores (i.e. percentage of positive cells and intensity of staining) choose the quick/Allred score, and therefore assign 'QS'.",
         "Assign 'IP': if the report mentions that it is reporting a H-score or a combined score obtained by multiplying the intensity of staining and the percentage of positive cells for ER status. Its value ranges from 0-300. Note: if a H-score/combined score is being reported in conjunction with other component scores (i.e. percentage of positive cells and intensity of staining) choose the H-score/combined score, and therefore assign 'IP'.",
         "Assign 'MD': if the report mentions that it is reporting the Mitch Dowsett score for ER status. Its value ranges from 0-18. Note: if a Mitch Dowsett score is being reported in conjunction with other component scores (i.e. percentage of positive cells and intensity of staining) choose the Mitch Dowsett score, and therefore assign 'MD'.",
@@ -18,7 +30,7 @@
       "description": "If the pathology report specifies the oestrogen receptor (ER) status, extract and assign the value to this variable.",
       "type": ["string", "null"],
       "enum": ["P", "N", "NP", null],
-      "enumDescriptions": [
+      "x-enumDescriptions": [
         "Assign 'P': if the report specifies that the ER status is positive. Note: in the unusual case where the ER status is not specified in the report but the 'erScoreType' variable is assigned 'QS', and a quick/Allred score (ranges from 0-8) is assigned in the report— attempt to infer the ER status on your own. Here, if the specified quick/Allred score is 3, 4, 5, 6, 7, or 8, assign 'P'. Otherwise, assign 'N'",
         "Assign 'N': if the report specifies that the ER status is negative. Note: in the unusual case where the ER status is not specified in the report but the 'erScoreType' variable is assigned 'QS', and a quick/Allred score (ranges from 0-8) is assigned in the report— attempt to infer the ER status on your own. Here, if the specified quick/Allred score is 0, 1, or 2, assign 'N'. Otherwise, assign 'P'",
         "Assign 'NP': if the ER status test is explicitly specified as Not Performed in the report. Note: if the report mentions that the ER test is not applicable (N/A) to the patient, do not assign 'NP', instead assign null to this variable.",
@@ -29,7 +41,7 @@
       "description": "If the pathology report specifies a immunohistochemistry test score for progesterone receptor (PR) status, determine the type of score that is being reported.",
       "type": ["string", "null"],
       "enum": ["QS", "IP", "MD", "I", "P", null],
-      "enumDescriptions": [
+      "x-enumDescriptions": [
         "Assign 'QS': if the report mentions that it is reporting an Allred score or a quick score (QS) for PR status. Its value ranges from 0-8. Note 1: if the score for PR status is reported as a fraction out of 8 without mentioning the score type (e.g. 7/8) assume that it is reporting an Allred score, and assign 'QS'. Note 2: if the score for PR status is reported as an integer, the integer is between 0 and 8, and the report does not specify any of the PR score types listed here, assume that it is reporting an Allred score and assign 'QS'. Note 3: if a quick/Allred score is being reported in conjunction with other component scores (i.e. percentage of positive cells and intensity of staining) choose the quick/Allred score, and therefore assign 'QS'.",
         "Assign 'IP': if the report mentions that it is reporting a H-score or a combined score obtained by multiplying the intensity of staining and the percentage of positive cells for PR status. Its value ranges from 0-300. Note: if a H-score/combined score is being reported in conjunction with other component scores (i.e. percentage of positive cells and intensity of staining) choose the H-score/combined score, and therefore assign 'IP'.",
         "Assign 'MD': if the report mentions that it is reporting the Mitch Dowsett score for PR status. Its value ranges from 0-18. Note: if a Mitch Dowsett score is being reported in conjunction with other component scores (i.e. percentage of positive cells and intensity of staining) choose the Mitch Dowsett score, and therefore assign 'MD'.",
@@ -42,13 +54,12 @@
       "description": "If the pathology report specifies the progesterone receptor (PR) status, extract and assign the value to this variable.",
       "type": ["string", "null"],
       "enum": ["P", "N", "NP", null],
-      "enumDescriptions": [
+      "x-enumDescriptions": [
         "Assign 'P': if the report specifies that the PR status is positive. Note: in the unusual case where the PR status is not specified in the report but the 'prScoreType' variable is assigned 'QS', and a quick/Allred score (ranges from 0-8) is assigned in the report— attempt to infer the PR status on your own. Here, if the specified quick/Allred score is 3, 4, 5, 6, 7, or 8, assign 'P'. Otherwise, assign 'N'",
         "Assign 'N': if the report specifies that the PR status is negative. Note: in the unusual case where the PR status is not specified in the report but the 'prScoreType' variable is assigned 'QS', and a quick/Allred score (ranges from 0-8) is assigned in the report— attempt to infer the PR status on your own. Here, if the specified quick/Allred score is 0, 1, or 2, assign 'N'. Otherwise, assign 'P'",
         "Assign 'NP': if the PR status test is explicitly specified as Not Performed in the report. Note: if the report mentions that the PR test is not applicable (N/A) to the patient, do not assign 'NP', instead assign null to this variable.",
         "Assign null: if the PR status is not specified in the report or if the report mentions that the PR test is not applicable (N/A) to the patient."
       ]
     }
-  },
-  "required": ["erScoreType", "erStatus", "prScoreType", "prStatus"]
+  }
 }

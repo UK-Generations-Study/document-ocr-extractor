@@ -1,11 +1,23 @@
 {
+  "$id": "https://github.com/jeyabbalas/medical-report-information-extractor/tree/main/examples/bcn_generations_pathology_data/config/schemas/breastCancerType.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Breast cancer type schema",
+  "description": "Schema for presence/absence of different breast cancer histological types (CIS, DCIS, LCIS, Paget's disease, microinvasion, invasive carcinoma) extracted from breast cancer pathology reports.",
   "type": "object",
+  "required": ["cis", "dcis", "lcis", "pleomorphicLCIS", "pagetsDisease", "microinvasion", "invasiveCarcinoma"],
+  "x-version": "1.0.0",
+  "x-provenance": {
+    "x-lastModified": "2026-07-01",
+    "x-repository": "https://github.com/jeyabbalas/medical-report-information-extractor",
+    "x-maintainer": "Medical Report Information Extractor"
+  },
+  "x-primaryKey": ["fileName"],
   "properties": {
     "cis": {
       "description": "Determine if the report mentions whether or not a type of carcinoma in situ (CIS) of the breast was present. CIS can include ductal carcinoma in situ (DCIS) or lobular carcinoma in situ (LCIS).",
       "type": ["string", "null"],
       "enum": ["P", "N", null],
-      "enumDescriptions": [
+      "x-enumDescriptions": [
         "Assign 'P': if the report mentions that a type of CIS was present.",
         "Assign 'N': only if the report explicitly mentions that none of the types of CIS were present. Note: avoid the common error of incorrectly assigning 'N' when no information is contained in the report on the presence/absence of CIS.",
         "Assign null: if the report does not contain any information on either the presence or absence of CIS."
@@ -15,7 +27,7 @@
       "description": "Determine if the report mentions whether or not ductal carcinoma in situ (DCIS) was present.",
       "type": ["string", "null"],
       "enum": ["P", "N", null],
-      "enumDescriptions": [
+      "x-enumDescriptions": [
         "Assign 'P': if the report mentions that DCIS was present.",
         "Assign 'N': only if the report explicitly mentions that DCIS was not present. Note: avoid the common error of incorrectly assigning 'N' when no information is contained in the report on the presence/absence of DCIS.",
         "Assign null: if the report does not contain any information on either the presence or absence of DCIS."
@@ -25,7 +37,7 @@
       "description": "Determine if the report mentions whether or not lobular carcinoma in situ (LCIS) was present.",
       "type": ["string", "null"],
       "enum": ["P", "N", null],
-      "enumDescriptions": [
+      "x-enumDescriptions": [
         "Assign 'P': if the report mentions that LCIS was present.",
         "Assign 'N': only if the report explicitly mentions that LCIS was not present. Note: avoid the common error of incorrectly assigning 'N' when no information is contained in the report on the presence/absence of LCIS.",
         "Assign null: if the report does not contain any information on either the presence or absence of LCIS."
@@ -35,7 +47,7 @@
       "description": "Determine if the report mentions whether or not pleomorphic lobular carcinoma in situ (LCIS) was present. Pleomorphic LCIS is a type of LCIS.",
       "type": ["string", "null"],
       "enum": ["P", "N", null],
-      "enumDescriptions": [
+      "x-enumDescriptions": [
         "Assign 'P': if the report mentions that pleomorphic LCIS was present.",
         "Assign 'N': only if the report explicitly mentions that pleomorphic LCIS was not present. Note: avoid the common error of incorrectly assigning 'N' when no information is contained in the report on the presence/absence of pleomorphic LCIS.",
         "Assign null: if the report does not contain any information on either the presence or absence of pleomorphic LCIS."
@@ -45,7 +57,7 @@
       "description": "Determine if the report mentions whether or not Paget's disease of the breast was present.",
       "type": ["string", "null"],
       "enum": ["P", "N", null],
-      "enumDescriptions": [
+      "x-enumDescriptions": [
         "Assign 'P': if the report mentions that Paget's disease of the breast was present.",
         "Assign 'N': only if the report explicitly mentions that Paget's disease of the breast was not present. Note: avoid the common error of incorrectly assigning 'N' when no information is contained in the report on the presence/absence of Paget's disease.",
         "Assign null: if the report does not contain any information on either the presence or absence of Paget's disease of the breast."
@@ -55,7 +67,7 @@
       "description": "Determine if the report mentions whether or not microinvasive breast cancer was present.",
       "type": ["string", "null"],
       "enum": ["P", "N", null],
-      "enumDescriptions": [
+      "x-enumDescriptions": [
         "Assign 'P': if the report mentions that microinvasive breast cancer was present.",
         "Assign 'N': only if the report explicitly mentions that microinvasive breast cancer was not present. Note: avoid the common error of incorrectly assigning 'N' when no information is contained in the report on the presence/absence of microinvasive carcinoma.",
         "Assign null: if the report does not contain any information on either the presence or absence of microinvasive breast cancer."
@@ -65,12 +77,11 @@
       "description": "Determine if the report mentions whether or not invasive breast cancer was present.",
       "type": ["string", "null"],
       "enum": ["P", "N", null],
-      "enumDescriptions": [
+      "x-enumDescriptions": [
         "Assign 'P': if the report mentions that invasive breast cancer was present.",
         "Assign 'N': only if the report explicitly mentions that invasive breast cancer was not present. Note: avoid the common error of incorrectly assigning 'N' when no information is contained in the report on the presence/absence of invasive carcinoma.",
         "Assign null: if the report does not contain any information on either the presence or absence of invasive breast cancer."
       ]
     }
-  },
-  "required": ["cis", "dcis", "lcis", "pleomorphicLCIS", "pagetsDisease", "microinvasion", "invasiveCarcinoma"]
+  }
 }

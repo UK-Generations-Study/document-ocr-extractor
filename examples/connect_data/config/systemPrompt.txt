@@ -9,7 +9,7 @@ You are given a cervical cancer pathology report enclosed within the `<report>` 
 
 Alongside the report, you will be given the following information enclosed within the `<query>` tag:
 1. JSON keys (`<json_keys>`): A list of requested keys for which, values need to be extracted from the pathology report.
-2. JSON Schema (`<json_schema>`): The JSON Schema of the expected JSON output. It contains information of the data types, possible values, and descriptions of each requested key. For categorical variables, this includes descriptions of each possible category.
+2. JSON Schema (`<json_schema>`): The JSON Schema (draft 2020-12) of the expected JSON output. It contains information of the data types, possible values, and descriptions of each requested key. For categorical variables, per-category guidance is given under the `x-enumDescriptions` array (aligned by index with the `enum` array). Units for numeric variables are given under `x-unit`. Additional notes may appear under `x-description`. Treat any `x-` prefixed annotation as an authoritative constraint, exactly as if it had no prefix.
 
 
 ## TASK:

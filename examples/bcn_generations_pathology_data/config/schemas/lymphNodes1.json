@@ -1,5 +1,17 @@
 {
+  "$id": "https://github.com/jeyabbalas/medical-report-information-extractor/tree/main/examples/bcn_generations_pathology_data/config/schemas/lymphNodes1.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Axillary procedure and vascular invasion schema",
+  "description": "Schema for axillary lymph node procedure and lymphatic/vascular invasion status extracted from breast cancer pathology reports.",
   "type": "object",
+  "required": ["axillaryProcedure", "vascularInvasion"],
+  "x-version": "1.0.0",
+  "x-provenance": {
+    "x-lastModified": "2026-07-01",
+    "x-repository": "https://github.com/jeyabbalas/medical-report-information-extractor",
+    "x-maintainer": "Medical Report Information Extractor"
+  },
+  "x-primaryKey": ["fileName"],
   "properties": {
     "axillaryProcedure": {
       "description": "Identify the surgical procedure performed to either remove or sample the axillary lymph nodes, as mentioned in the report. Assign null: if not applicable or if no information on axillary procedure is present in the report.",
@@ -7,7 +19,7 @@
       "items": {
         "type": "string",
         "enum": ["ANC", "ANS", "NLN", "OSNA", "SNB"],
-        "enumDescriptions": [
+        "x-enumDescriptions": [
           "Assign 'ANC': if Axillary Node Clearance was done.",
           "Assign 'ANS': if Axillary Node Sample was collected.",
           "Assign 'NLN': if the report explicitly mentions that no Lymph node procedure was done. Note: if no information is available in the report regarding axillary procedures, assign null to the variable.",
@@ -20,13 +32,12 @@
       "description": "Determine if the pathologist has reported the status of lymphatic or vascular invasion.",
       "type": ["string", "null"],
       "enum": ["Pres", "Poss", "NS", null],
-      "enumDescriptions": [
+      "x-enumDescriptions": [
         "Assign 'Pres': if the pathologist has reported that lymphatic or vascular invasion is present.",
         "Assign 'Poss': if the pathologist has reported that lymphatic or vascular invasion is possible or probable.",
         "Assign 'NS': if the pathologist has reported that lymphatic or vascular invasion is not seen.",
         "Assign null: if the pathologist has not reported on the status of lymphatic or vascular invasion."
       ]
     }
-  },
-  "required": ["axillaryProcedure", "vascularInvasion"]
+  }
 }

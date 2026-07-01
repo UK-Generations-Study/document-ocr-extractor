@@ -1,11 +1,23 @@
 {
+  "$id": "https://github.com/jeyabbalas/medical-report-information-extractor/tree/main/examples/bcn_generations_pathology_data/config/schemas/lymphNodes2.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Lymph node counts schema",
+  "description": "Schema for axillary and 'other' lymph node counts (present/absent, total analyzed, total positive) extracted from breast cancer pathology reports.",
   "type": "object",
+  "required": ["axillaryNodesPresent", "axillaryNodesTotal", "axillaryNodesPositive", "otherNodesPresent", "otherNodesTotal", "otherNodesPositive"],
+  "x-version": "1.0.0",
+  "x-provenance": {
+    "x-lastModified": "2026-07-01",
+    "x-repository": "https://github.com/jeyabbalas/medical-report-information-extractor",
+    "x-maintainer": "Medical Report Information Extractor"
+  },
+  "x-primaryKey": ["fileName"],
   "properties": {
     "axillaryNodesPresent": {
       "description": "Determine if the report mentions that axillary lymph nodes were present/sampled. Look for sections in the report that summarizes the findings from analyzing the nodes (total nodes, total positives). If such a summary is provided, only use the information in this section and ignore the information elsewhere. Sometimes this information is explicitly stated e.g. 'Lymph nodes sampled: Yes'. Sometimes this information is only implied through an analysis summary using fractions e.g., '0/3' implies that 0 out of 3 lymph nodes are positive for cancer. Sometimes this information is only implied through an analysis summary using free-text e.g. 'Total nodes: 3'. All of these imply that lymph nodes were present/sampled. Note: If the nodes are not explicitly described as of type 'other', always assume that the nodes are of axillary type.",
       "type": ["string", "null"],
       "enum": ["Y", "N", null],
-      "enumDescriptions": [
+      "x-enumDescriptions": [
         "Assign 'Y': if the report clearly indicates that axillary lymph nodes are present/sampled for analysis.",
         "Assign 'N': if the report explicitly specifies that axillary lymph nodes are not present/sampled for analysis. Note 1: If the total number of axillary nodes is specified as 0, assign 'N'. Note 2: If only nodes of type 'other' are mentioned in the report, assign 'N'.",
         "Assign null: if the report does not contain this information."
@@ -23,7 +35,7 @@
       "description": "Determine if the report mentions that lymph nodes of 'other' (not axillary) type were present/sampled. Look for sections in the report that summarizes the findings from analyzing the nodes (total nodes, total positives). If such a summary is provided, only use the information in this section and ignore the information elsewhere. Note 1: Only assume that the lymph nodes are of 'other' type if it is explicitly stated by the pathologist e.g. 'Other nodes present    Yes' or 'Other Yes'. Sometimes, in the report summary, the pathologist may explicitly group axillary and non-axillary nodes separately, here too you can assume that the non-axillary nodes are of 'other' type. Otherwise, assume that they are axillary nodes. Note 2: sentinel nodes are not necessarily 'other' nodes unless explicitly stated by the pathologist.",
       "type": ["string", "null"],
       "enum": ["Y", "N", null],
-      "enumDescriptions": [
+      "x-enumDescriptions": [
         "Assign 'Y': if the report clearly indicates that lymph nodes of type 'other' are present/sampled.",
         "Assign 'N': if the report clearly specifies that lymph nodes of type 'other' are not present/sampled. Note: If the total number of 'other' nodes is specified as 0, assign 'N'.",
         "Assign null: if the report does not contain information on nodes of 'other' type. Note: If only axillary nodes are mentioned in the report and the report contains no mention of nodes of 'other' type, assign null."
@@ -37,6 +49,5 @@
       "description": "If the report summarizes the number of lymph nodes of 'other' type analyzed and the number of other nodes that were found to be positive for cancer, determine the number of lymph nodes of 'other' type that were found to be positive for cancer. Look for sections in the report that summarizes the findings from analyzing the nodes (total nodes, total positives). If such a summary is provided, only use the information in this section and ignore the information elsewhere. Sometimes this information is summarized using fractions e.g., '0/3' under other nodes implies that 0 out of 3 other lymph nodes are positive for cancer. Sometimes this information is summarized using free-text e.g. 'Number positive: 0' or 'all nodes were negative for tumour' under other nodes. In all these examples, you would assign the value 0 to this variable. Assign null: if the report does not contain this information. Note: If 'otherNodesPresent' is assigned 'N' or null, assign null to 'otherNodesPositive'. This variable takes a non-null value only if 'otherNodesPresent' is assigned 'Y'.",
       "type": ["integer", "null"]
     }
-  },
-  "required": ["axillaryNodesPresent", "axillaryNodesTotal", "axillaryNodesPositive", "otherNodesPresent", "otherNodesTotal", "otherNodesPositive"]
+  }
 }
