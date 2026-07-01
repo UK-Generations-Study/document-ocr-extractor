@@ -1,5 +1,5 @@
 {
-  "$id": "https://github.com/jeyabbalas/medical-report-information-extractor/tree/main/examples/bcn_generations_pathology_data/config/schemas/ihc1.json",
+  "$id": "https://github.com/jeyabbalas/medical-report-information-extractor/tree/main/examples/bcn_generations_pathology_data/config/brca/schemas/ihc1.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Immunohistochemistry (ER and PR) schema",
   "description": "Schema for oestrogen receptor (ER) and progesterone receptor (PR) status and score types extracted from breast cancer pathology reports.",

@@ -1,0 +1,6 @@
+{
+  "systemPrompt": "https://raw.githubusercontent.com/jeyabbalas/medical-report-information-extractor/refs/heads/main/examples/bcn_generations_pathology_data/config/bbd/systemPrompt.txt",
+  "schemaFiles": [
+    "https://raw.githubusercontent.com/jeyabbalas/medical-report-information-extractor/refs/heads/main/examples/bcn_generations_pathology_data/config/bbd/schemas/bbd.json"
+  ]
+}

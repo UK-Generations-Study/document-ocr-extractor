@@ -1,5 +1,5 @@
 {
-  "$id": "https://github.com/jeyabbalas/medical-report-information-extractor/tree/main/examples/bcn_generations_pathology_data/config/schemas/excision.json",
+  "$id": "https://github.com/jeyabbalas/medical-report-information-extractor/tree/main/examples/bcn_generations_pathology_data/config/brca/schemas/excision.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Excision margin schema",
   "description": "Schema for excision margin variables extracted from breast cancer pathology reports.",

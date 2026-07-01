@@ -1,5 +1,5 @@
 {
-  "$id": "https://github.com/jeyabbalas/medical-report-information-extractor/tree/main/examples/bcn_generations_pathology_data/config/schemas/lymphNodes1.json",
+  "$id": "https://github.com/jeyabbalas/medical-report-information-extractor/tree/main/examples/bcn_generations_pathology_data/config/brca/schemas/lymphNodes1.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Axillary procedure and vascular invasion schema",
   "description": "Schema for axillary lymph node procedure and lymphatic/vascular invasion status extracted from breast cancer pathology reports.",

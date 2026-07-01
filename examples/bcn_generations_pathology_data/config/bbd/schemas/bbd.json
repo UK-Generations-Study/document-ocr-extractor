@@ -1,0 +1,173 @@
+{
+  "$id": "https://github.com/jeyabbalas/medical-report-information-extractor/tree/main/examples/bcn_generations_pathology_data/config/bbd/schemas/bbd.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Benign breast disease pathology schema",
+  "description": "Monolithic schema for variables extracted from benign breast disease (BBD) pathology reports (needle biopsies, vacuum-assisted biopsies, and excision specimens). Covers procedural context, calcification workup, the RCPath B-classification, the pathologist's overall benign/malignant/uncertain verdict, the specific pathological findings mentioned, and category-level presence/absence flags for atypia, in situ carcinoma, and invasive carcinoma. Note: this schema is intentionally BBD-focused; if a specimen is B5 (malignant) the finer-grained cancer variables (histological grade, receptor status, size, node counts, TNM, etc.) are captured elsewhere.",
+  "type": "object",
+  "required": [
+    "screenDetected",
+    "laterality",
+    "biopsyType",
+    "calcificationsPresent",
+    "calcificationCategory",
+    "Bclassification",
+    "benignMalignantAssessment",
+    "findings",
+    "atypicalHyperplasiaPresent",
+    "insituPresent",
+    "invasivePresent"
+  ],
+  "x-version": "1.0.0",
+  "x-provenance": {
+    "x-lastModified": "2026-07-01",
+    "x-repository": "https://github.com/jeyabbalas/medical-report-information-extractor",
+    "x-maintainer": "Medical Report Information Extractor"
+  },
+  "x-primaryKey": ["fileName"],
+  "properties": {
+    "screenDetected": {
+      "description": "Whether the pathology report indicates that the lesion or tissue sampled was detected through breast cancer screening (e.g., a national screening programme, screening mammography, or a routine surveillance appointment) rather than through a symptomatic presentation. The signal may be explicit ('screen-detected', 'from screening', 'BSU / breast screening unit', 'assessment clinic following abnormal screening mammogram') or clearly implied by the referral source. Do not infer screen-detection purely because a mammogram was performed — many symptomatic patients also have mammograms.",
+      "type": ["string", "null"],
+      "enum": ["Y", "N", null],
+      "x-enumDescriptions": [
+        "Assign 'Y': if the report states or clearly implies that the lesion / tissue was detected through cancer screening.",
+        "Assign 'N': if the report explicitly states that the lesion / tissue was not detected through screening (e.g., a symptomatic referral is explicitly mentioned).",
+        "Assign null: if the report does not contain information on how the lesion / tissue came to attention."
+      ]
+    },
+    "laterality": {
+      "description": "The side of the breast from which the primary tissue specimen described in this report was obtained. The information in the pathology report is in reference to this specimen.",
+      "type": ["string", "null"],
+      "enum": ["L", "R", "B", "U", null],
+      "x-enumDescriptions": [
+        "Assign 'L': if the specimen was obtained from the left breast.",
+        "Assign 'R': if the specimen was obtained from the right breast.",
+        "Assign 'B': if the report clearly describes specimens from both breasts within the same report (bilateral sampling).",
+        "Assign 'U': if the report explicitly states that the laterality is unknown or the descriptions are genuinely ambiguous / conflicting.",
+        "Assign null: if the report does not mention laterality at all."
+      ]
+    },
+    "biopsyType": {
+      "description": "The procedure used to obtain the primary tissue specimen described in the report. If the report describes multiple procedures on the same case (e.g., a prior core biopsy followed by an excision), pick the procedure that produced the specimen this report is primarily analysing. For CNB and VAB, the report may name the guidance modality (ultrasound-guided, stereotactic, MRI-guided) — this does not change the biopsy-type category.",
+      "type": ["string", "null"],
+      "enum": ["CNB", "VAB", "FNA", "EXB", "OTH", null],
+      "x-enumDescriptions": [
+        "Assign 'CNB': core needle biopsy (also called wide-bore needle biopsy or 14G core biopsy), regardless of image guidance modality.",
+        "Assign 'VAB': vacuum-assisted biopsy (also known as vacuum-assisted core biopsy, mammotome, or brand names such as Encor). Commonly used for calcification workup.",
+        "Assign 'FNA': fine needle aspiration cytology.",
+        "Assign 'EXB': surgical excision biopsy performed for diagnostic purposes. This includes open biopsy, wide local excision performed diagnostically, and wire- / hookwire- / marker-guided excision.",
+        "Assign 'OTH': any other biopsy procedure that does not fit the categories above (e.g., punch biopsy of the nipple or skin, incisional biopsy, nipple biopsy, mastectomy specimen used diagnostically).",
+        "Assign null: if the report does not describe the procedure or the procedure cannot be determined from the report."
+      ]
+    },
+    "calcificationsPresent": {
+      "description": "Whether the pathologist comments on the presence or absence of calcifications (microcalcifications or macrocalcifications) in the tissue examined. Calcifications may be described in the histological findings ('calcifications identified within ductal spaces', 'associated microcalcifications'), referred to from the radiological indication ('biopsy for microcalcifications on mammogram'), or explicitly ruled out ('no calcifications identified'). Base this field only on what the pathologist actually reports about the tissue; do not infer from radiology-only statements unless the pathologist confirms.",
+      "type": ["string", "null"],
+      "enum": ["Y", "N", null],
+      "x-enumDescriptions": [
+        "Assign 'Y': if the report describes calcifications as present in the tissue examined.",
+        "Assign 'N': if the report explicitly states that calcifications were not identified in the tissue examined.",
+        "Assign null: if the report does not mention calcifications at all."
+      ]
+    },
+    "calcificationCategory": {
+      "description": "When calcifications are described, the suspicion category assigned to them, using the standard three-tier scheme. Prefer the pathologist's or radiologist's own wording when present; do not infer a category from morphological description alone unless the report explicitly attaches one of these labels.",
+      "type": ["string", "null"],
+      "enum": ["benign", "indeterminate", "suspicious", null],
+      "x-enumDescriptions": [
+        "Assign 'benign': if calcifications are described as benign in appearance (e.g., 'benign-type', 'coarse', 'popcorn-like', 'vascular', 'skin', 'rim/eggshell', 'milk of calcium').",
+        "Assign 'indeterminate': if calcifications are described as indeterminate, of uncertain significance, or requiring further characterisation.",
+        "Assign 'suspicious': if calcifications are described as suspicious for malignancy (e.g., 'pleomorphic', 'fine linear', 'branching', 'clustered atypical').",
+        "Assign null: if calcifications are not present, are present but not characterised into one of these categories, or the report gives no such classification."
+      ]
+    },
+    "Bclassification": {
+      "description": "The RCPath (Royal College of Pathologists, UK) B-classification for breast biopsies, as stated by the pathologist. This scheme is standard for needle biopsies (CNB, VAB) and is sometimes also given on excision specimens. Prefer the classification stated explicitly by the pathologist; do not infer a B-category purely from the underlying diagnosis. Distinguish carefully between B5 without a/b subclass (a general 'malignant' verdict), B5a (in situ), and B5b (invasive).",
+      "type": ["string", "null"],
+      "enum": ["B1", "B2", "B3", "B4", "B5", "B5a", "B5b", null],
+      "x-enumDescriptions": [
+        "Assign 'B1': if the biopsy is classified as normal tissue only, or as unsatisfactory / non-representative / inadequate.",
+        "Assign 'B2': if the biopsy is classified as benign.",
+        "Assign 'B3': if the biopsy is classified as of uncertain malignant potential (borderline). Typical B3 lesions include ADH, classic LCIS, radial scar / complex sclerosing lesion, papillary lesions, flat epithelial atypia, atypical lobular hyperplasia, and phyllodes tumours.",
+        "Assign 'B4': if the biopsy is classified as suspicious of malignancy (features that fall short of definite malignancy).",
+        "Assign 'B5': if the biopsy is classified as malignant but the a / b subclass is not specified in the report.",
+        "Assign 'B5a': if the biopsy is classified as malignant with in situ disease (typically DCIS or high-grade LCIS being managed as malignant).",
+        "Assign 'B5b': if the biopsy is classified as malignant with invasive disease.",
+        "Assign null: if the report does not state a B-classification for this specimen (e.g., excision or cytology reports where the scheme is not used, or reports where the pathologist gives only a narrative diagnosis without a B-code)."
+      ]
+    },
+    "benignMalignantAssessment": {
+      "description": "The pathologist's overall diagnostic verdict on the specimen, expressed in plain terms rather than as a B-classification. Populate this field whenever the pathologist gives a summary judgement in the report — even if a B-classification is also present, because the two channels may disagree or one may be missing. This field is especially useful for reports that do not use the B-classification scheme at all.",
+      "type": ["string", "null"],
+      "enum": ["benign", "malignant", "uncertain", null],
+      "x-enumDescriptions": [
+        "Assign 'benign': if the pathologist describes the sample as benign, non-malignant, non-neoplastic, normal, negative for malignancy, or gives only a B1 / B2 verdict without further qualification.",
+        "Assign 'malignant': if the pathologist describes the sample as malignant, cancerous, or positive for malignancy, or gives a B5 / B5a / B5b verdict.",
+        "Assign 'uncertain': if the pathologist expresses uncertainty about malignancy (e.g., 'atypical', 'borderline', 'suspicious', 'cannot exclude malignancy', 'features of uncertain significance', 'awaiting further review'), or gives a B3 / B4 verdict.",
+        "Assign null: if the report does not give an overall benign / malignant / uncertain verdict of this kind."
+      ]
+    },
+    "findings": {
+      "description": "The list of specific pathological findings mentioned as present in the tissue sample, drawn from a fixed vocabulary of 10 entities relevant to BBD workup. Populate this list with every applicable enum value the pathologist describes as present in the report. Absence of a value from this list means the report did not describe that specific finding as present; it does not, by itself, mean the pathologist actively ruled that finding out — that information is captured, for the atypia / in situ / invasive categories, by the three '...Present' flags below. Assign an empty array if the pathologist describes the tissue but none of the listed findings are present. Assign null only if the report contains no meaningful pathological description of the tissue at all (e.g., a report that is entirely administrative or is truncated). Do not include an entity in the list if the pathologist only mentions it to rule it out (e.g., 'no evidence of DCIS' — leave DCIS out of the list and set insituPresent to 'N').",
+      "type": ["array", "null"],
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "enum": [
+          "fibroadenoma",
+          "phyllodesTumor",
+          "radialScar",
+          "papilloma",
+          "sclerosingAdenosis",
+          "ADH",
+          "ALH",
+          "FEA",
+          "DCIS",
+          "LCIS"
+        ],
+        "x-enumDescriptions": [
+          "Include 'fibroadenoma': if the report describes a fibroadenoma present in the tissue (any variant — simple, complex, juvenile, giant). Do not include for fibroadenomatoid change / hyperplasia unless the pathologist gives a definite fibroadenoma diagnosis.",
+          "Include 'phyllodesTumor': if the report describes a phyllodes tumour (also called cystosarcoma phyllodes), of any grade — benign, borderline, or malignant.",
+          "Include 'radialScar': if the report describes a radial scar or a complex sclerosing lesion (these are considered equivalent for this schema).",
+          "Include 'papilloma': if the report describes an intraductal papilloma, whether solitary or multiple, and whether central or peripheral.",
+          "Include 'sclerosingAdenosis': if the report describes sclerosing adenosis. Do not include for adenosis without qualification unless the pathologist specifies the sclerosing variant.",
+          "Include 'ADH': if the report describes atypical ductal hyperplasia specifically. Do not include ADH just because the report says 'atypical hyperplasia' without specifying ductal — instead, set atypicalHyperplasiaPresent to 'P' and leave ADH out.",
+          "Include 'ALH': if the report describes atypical lobular hyperplasia specifically.",
+          "Include 'FEA': if the report describes flat epithelial atypia (also written as columnar cell change with atypia or columnar cell lesion with atypia).",
+          "Include 'DCIS': if the report describes ductal carcinoma in situ. Include regardless of grade (low / intermediate / high). Do not include DCIS just because the report says 'in situ carcinoma' without specifying ductal.",
+          "Include 'LCIS': if the report describes lobular carcinoma in situ. Include both classic LCIS and pleomorphic LCIS under this value."
+        ]
+      }
+    },
+    "atypicalHyperplasiaPresent": {
+      "description": "Category-level flag for atypical epithelial hyperplasia — the coarse yes/no/unknown signal, independent of subtype. Populate this whenever the pathologist comments on the presence or absence of atypia in an epithelial proliferation, including cases where the specific subtype (ADH / ALH / FEA) is not named. This complements the specific subtypes captured in 'findings'.",
+      "type": ["string", "null"],
+      "enum": ["P", "N", null],
+      "x-enumDescriptions": [
+        "Assign 'P': if the report describes atypical hyperplasia as present — including cases where a specific subtype is named (ADH / ALH / FEA) and cases where the report simply refers to 'atypia', 'atypical epithelial proliferation', or 'atypical hyperplasia' without naming the subtype.",
+        "Assign 'N': if the report explicitly states that atypical hyperplasia is not present (e.g., 'no atypia identified', 'without atypia', 'no atypical hyperplasia seen').",
+        "Assign null: if the report does not comment on the presence or absence of atypia."
+      ]
+    },
+    "insituPresent": {
+      "description": "Category-level flag for in situ carcinoma — the coarse yes/no/unknown signal, independent of subtype. Populate this whenever the pathologist comments on the presence or absence of in situ carcinoma, including cases where the specific subtype (DCIS / LCIS) is not named. This complements the specific subtypes captured in 'findings'.",
+      "type": ["string", "null"],
+      "enum": ["P", "N", null],
+      "x-enumDescriptions": [
+        "Assign 'P': if the report describes in situ carcinoma as present — including cases where a specific subtype is named (DCIS / LCIS) and cases where the report simply refers to 'in situ carcinoma', 'CIS', or 'carcinoma in situ' without naming the subtype.",
+        "Assign 'N': if the report explicitly states that in situ carcinoma is not present (e.g., 'no DCIS identified', 'no in situ component', 'no carcinoma in situ seen').",
+        "Assign null: if the report does not comment on the presence or absence of in situ carcinoma."
+      ]
+    },
+    "invasivePresent": {
+      "description": "Category-level flag for invasive carcinoma — the coarse yes/no/unknown signal. In a benign breast disease workup this is usually absent, but must be captured accurately because its presence recharacterises the case entirely (moving it out of BBD).",
+      "type": ["string", "null"],
+      "enum": ["P", "N", null],
+      "x-enumDescriptions": [
+        "Assign 'P': if the report describes invasive carcinoma as present, of any histological type.",
+        "Assign 'N': if the report explicitly states that invasive carcinoma is not present (e.g., 'no invasion identified', 'no invasive component', 'no evidence of invasion').",
+        "Assign null: if the report does not comment on the presence or absence of invasion."
+      ]
+    }
+  }
+}

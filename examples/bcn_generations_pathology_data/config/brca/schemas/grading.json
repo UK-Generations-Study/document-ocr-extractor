@@ -1,5 +1,5 @@
 {
-  "$id": "https://github.com/jeyabbalas/medical-report-information-extractor/tree/main/examples/bcn_generations_pathology_data/config/schemas/grading.json",
+  "$id": "https://github.com/jeyabbalas/medical-report-information-extractor/tree/main/examples/bcn_generations_pathology_data/config/brca/schemas/grading.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Tumour grading schema",
   "description": "Schema for invasive carcinoma grade, component scores (tubules, nuclear pleomorphism, mitotic activity), and DCIS grade extracted from breast cancer pathology reports.",

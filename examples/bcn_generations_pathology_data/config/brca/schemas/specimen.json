@@ -1,5 +1,5 @@
 {
-  "$id": "https://github.com/jeyabbalas/medical-report-information-extractor/tree/main/examples/bcn_generations_pathology_data/config/schemas/specimen.json",
+  "$id": "https://github.com/jeyabbalas/medical-report-information-extractor/tree/main/examples/bcn_generations_pathology_data/config/brca/schemas/specimen.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Specimen schema",
   "description": "Schema for specimen laterality, screen detection, specimen type, specimen weight, and neoadjuvant therapy status extracted from breast cancer pathology reports.",

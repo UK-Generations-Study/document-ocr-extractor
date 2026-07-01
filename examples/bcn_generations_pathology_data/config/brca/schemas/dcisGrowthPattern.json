@@ -1,5 +1,5 @@
 {
-  "$id": "https://github.com/jeyabbalas/medical-report-information-extractor/tree/main/examples/bcn_generations_pathology_data/config/schemas/dcisGrowthPattern.json",
+  "$id": "https://github.com/jeyabbalas/medical-report-information-extractor/tree/main/examples/bcn_generations_pathology_data/config/brca/schemas/dcisGrowthPattern.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "DCIS growth pattern schema",
   "description": "Schema for ductal carcinoma in situ (DCIS) growth patterns (solid, cribriform, micropapillary, papillary, apocrine, flat, comedo, clinging) and comedonecrosis extent extracted from breast cancer pathology reports.",
