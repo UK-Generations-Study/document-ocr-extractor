@@ -22,6 +22,8 @@ import {
     deleteConfigRecord,
 } from './src/db.js';
 import { openWizard } from './src/ui/wizard.js';
+import { mountReportList } from './src/ui/reportList.js';
+import { mountReportViewer } from './src/ui/reportViewer.js';
 
 import { API_PROVIDERS, DEFAULT_OPENAI_BASE_URL } from './src/core/constants.js';
 
@@ -240,6 +242,32 @@ async function readSetupStatus() {
 }
 
 // =============================================================================
+// SELECTED-REPORT STATE
+// =============================================================================
+// Which document is currently loaded into the left/right panes. Bottom-list
+// clicks call setSelected(id); anyone else who cares (viewer, list, later
+// phases) subscribes via `subscribe(fn)`. Kept on the module scope because
+// it's a natural singleton for the whole app session.
+
+const _selectionSubs = new Set();
+let _selectedDocId = null;
+
+const selection = {
+    getSelected: () => _selectedDocId,
+    setSelected: (id) => {
+        if (id === _selectedDocId) return;
+        _selectedDocId = id || null;
+        for (const fn of _selectionSubs) {
+            try { fn(_selectedDocId); } catch (err) { console.error(err); }
+        }
+    },
+    subscribe: (fn) => {
+        _selectionSubs.add(fn);
+        return () => _selectionSubs.delete(fn);
+    },
+};
+
+// =============================================================================
 // SHELL + INIT
 // =============================================================================
 
@@ -257,9 +285,16 @@ function bindGearIcon() {
     });
 }
 
+async function mountWorkspace() {
+    // Report list (bottom) + viewer (left). Right pane stays empty until Phase 4.
+    await mountReportList({ selection });
+    mountReportViewer({ selection });
+}
+
 async function init() {
     ui('app');
     bindGearIcon();
+    await mountWorkspace();
 
     const status = await readSetupStatus();
     const setupComplete = status.schemaOk && status.credsOk && status.modelOk;
