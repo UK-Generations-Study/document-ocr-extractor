@@ -21,3 +21,13 @@ npm-debug.log*
 .env
 .env.local
 .env.*.local
+
+# On-disk reference to the private-eye OCR project.
+# Its Quick Read pipeline is ported into src/ocr/ (Phase 1); this
+# directory stays as a source-of-truth reference but is not tracked here.
+private-eye/
+
+# Assets staged by scripts/prepare-build.mjs (regenerated on every build).
+# Only public/coi-serviceworker.js is checked in.
+public/ort/
+public/models/
