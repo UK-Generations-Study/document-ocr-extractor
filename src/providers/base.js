@@ -4,7 +4,7 @@
  */
 
 import { isAuthError, isRateLimitError, createAuthError } from '../core/errors.js';
-import { DEFAULT_TEMPERATURE, DEFAULT_SEED, MAX_RETRIES, JSON_EXTRACTION_REGEX } from '../core/constants.js';
+import { JSON_EXTRACTION_REGEX } from '../core/constants.js';
 
 export class BaseLLMProvider {
     /**

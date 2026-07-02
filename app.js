@@ -24,8 +24,11 @@ import {
 import { openWizard } from './src/ui/wizard.js';
 import { mountReportList, refresh as refreshReportList } from './src/ui/reportList.js';
 import { mountReportViewer } from './src/ui/reportViewer.js';
-import { mountOcrView } from './src/ui/ocrView.js';
+import { initOcrView, releaseOcrPane, showOcrFor } from './src/ui/ocrView.js';
+import { initExtractionView, releaseExtractionPane, showExtractionFor } from './src/ui/extractionView.js';
+import { getDocument } from './src/db.js';
 import { enqueueDocument, primeQueueFromDb, recoverStuckDocuments, subscribeQueue } from './src/ocr/queue.js';
+import { enqueueExtraction, primeExtractionFromDb, recoverStuckExtraction, subscribeExtract } from './src/extract/extract.js';
 
 import { API_PROVIDERS, DEFAULT_OPENAI_BASE_URL } from './src/core/constants.js';
 
@@ -287,33 +290,63 @@ function bindGearIcon() {
     });
 }
 
+const OCR_STATUSES = new Set(['queued', 'ocr-running', 'ocr-done']);
+const EXTRACTION_STATUSES = new Set(['ocr-confirmed', 'extraction-running', 'extraction-done', 'confirmed', 'exported']);
+
+async function routeWorkPane(docId) {
+    if (!docId) {
+        releaseOcrPane();
+        releaseExtractionPane();
+        await showOcrFor(null);
+        return;
+    }
+    const doc = await getDocument(docId);
+    if (!doc) return;
+    if (EXTRACTION_STATUSES.has(doc.status)) {
+        releaseOcrPane();
+        await showExtractionFor(docId);
+    } else {
+        releaseExtractionPane();
+        await showOcrFor(docId);
+    }
+}
+
 async function mountWorkspace() {
     await mountReportList({ selection });
     mountReportViewer({ selection });
-    mountOcrView({ selection });
+    initOcrView();
+    initExtractionView();
 
-    // The queue drives status transitions on documents. Whenever anything
-    // material happens (a new doc becomes queued, OCR finishes, edits arrive)
-    // we refresh the bottom list so the badge stays honest.
-    subscribeQueue((ev) => {
+    // Router: pick the right work-pane view whenever the selected doc changes.
+    selection.subscribe((id) => { void routeWorkPane(id); });
+    // Also re-route whenever a status transition might flip the ownership
+    // (OCR queue confirm -> extraction; extraction confirm -> stays; etc).
+    subscribeQueue(async (ev) => {
         if (ev.type === 'status' || ev.type === 'doc-done' || ev.type === 'doc-start') {
             refreshReportList();
+            const sel = selection.getSelected();
+            if (sel === ev.docId) await routeWorkPane(sel);
+        }
+    });
+    subscribeExtract(async (ev) => {
+        if (ev.type === 'status' || ev.type === 'doc-done' || ev.type === 'doc-start' || ev.type === 'schema-done') {
+            refreshReportList();
+            const sel = selection.getSelected();
+            if (sel === ev.docId) await routeWorkPane(sel);
         }
     });
 
-    // Watch document ingestion so the OCR queue kicks in automatically.
-    // Rather than plumb ingest events end-to-end, we poll on a short interval
-    // - refreshReportList is cheap and we're only reading metadata. This will
-    // move to a proper event bus in Phase 5 or later.
     setInterval(async () => {
-        // primeQueueFromDb dedupes internally, so calling it repeatedly is safe.
         await primeQueueFromDb();
+        await primeExtractionFromDb();
     }, 2000);
-    // Boot recovery MUST run before the first prime pass so a doc left in
-    // 'ocr-running' from a previous session gets rewound to 'queued' before
-    // the queue looks at it.
     await recoverStuckDocuments();
+    await recoverStuckExtraction();
     await primeQueueFromDb();
+    await primeExtractionFromDb();
+
+    // Do the initial route once everything is wired.
+    await routeWorkPane(selection.getSelected());
 }
 
 async function init() {

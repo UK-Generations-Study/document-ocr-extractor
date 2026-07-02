@@ -20,18 +20,19 @@ import { cancelCurrentDeep, enqueueDeep, subscribeDeepQueue } from '../ocr/deepQ
 const MOUNT_ID = 'work-surface';
 const LOW_CONF_THRESHOLD = 0.6;
 
-let selectionRef = null;
 let currentDocId = null;
 let unsubQueue = null;
 let unsubDeep = null;
 // Per-doc Deep Read UI progress state, keyed by docId. Not persisted - purely
 // a rendering aid so the sticky bar can show weight download / phase.
 const deepState = new Map();
+// Only redraw automatically on queue events when the workPane router hasn't
+// switched us off. app.js sets this on OCR-family statuses.
+let ownsPane = false;
 
-export function mountOcrView({ selection }) {
-    selectionRef = selection;
+export function initOcrView() {
     unsubQueue = subscribeQueue((ev) => {
-        if (!currentDocId) return;
+        if (!ownsPane || !currentDocId) return;
         if (ev.docId && ev.docId !== currentDocId) return;
         if (ev.type === 'doc-done' || ev.type === 'status' || ev.type === 'doc-start') {
             renderFor(currentDocId, { force: true });
@@ -40,7 +41,6 @@ export function mountOcrView({ selection }) {
         }
     });
     unsubDeep = subscribeDeepQueue((ev) => {
-        // Track load-progress + phase for any doc so we can render on selection.
         if (ev.type === 'load-progress') {
             for (const st of deepState.values()) st.load = { loaded: ev.loaded, total: ev.total };
         }
@@ -49,7 +49,6 @@ export function mountOcrView({ selection }) {
             if (ev.type === 'doc-start') st.running = true;
             if (ev.type === 'page-start') { st.pageIndex = ev.pageIndex; st.pageCount = ev.pageCount; }
             if (ev.type === 'phase') { st.phase = ev.phase; st.phaseIndex = ev.index; st.phaseTotal = ev.total; }
-            if (ev.type === 'page-done') { /* pageIndex already tracked */ }
             if (ev.type === 'doc-done') { st.running = false; st.done = true; }
             if (ev.type === 'error' || ev.type === 'doc-error' || ev.type === 'page-error') {
                 st.error = ev.error?.message || ev.error?.title || String(ev.error);
@@ -57,10 +56,20 @@ export function mountOcrView({ selection }) {
             }
             deepState.set(ev.docId, st);
         }
-        if (currentDocId) renderFor(currentDocId, { force: true });
+        if (ownsPane && currentDocId) renderFor(currentDocId, { force: true });
     });
-    renderFor(selection.getSelected());
-    selection.subscribe((id) => renderFor(id));
+}
+
+/** Called by the workPane router when the OCR view should be visible. */
+export function showOcrFor(docId) {
+    ownsPane = true;
+    return renderFor(docId, { force: true });
+}
+
+/** Called by the router when the extraction view takes over. */
+export function releaseOcrPane() {
+    ownsPane = false;
+    currentDocId = null;
 }
 
 async function renderFor(docId, { force } = {}) {
