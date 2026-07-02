@@ -52,9 +52,14 @@ let geminiClient = null;
 async function fetchAndValidateConfig(configUrl) {
     if (!configUrl) return { ok: false, error: 'No config URL provided.' };
 
+    // Absolute-ise the outer URL so `new URL(rel, base)` below has an origin
+    // to resolve against even when the caller passed a path like
+    // '/medical-report-information-extractor/schemas/bbd/config.json'.
+    const absConfigUrl = new URL(configUrl, window.location.href).href;
+
     let configJson;
     try {
-        const resp = await fetch(configUrl);
+        const resp = await fetch(absConfigUrl);
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         configJson = await resp.json();
     } catch (err) {
@@ -68,14 +73,22 @@ async function fetchAndValidateConfig(configUrl) {
     if (schemaFiles === undefined) {
         return { ok: false, error: 'config.json is missing "schemaFiles".' };
     }
-    const schemaFileUrls = Array.isArray(schemaFiles) ? schemaFiles : [schemaFiles];
-    const jsonldFileUrls = jsonldContextFiles
-        ? (Array.isArray(jsonldContextFiles) ? jsonldContextFiles : [jsonldContextFiles])
-        : [];
+
+    // Resolve every inner URL against the config file's location so a config
+    // written with sibling-relative paths ('./schemas/foo.json') works when
+    // served from public/schemas/ AND when fetched raw from GitHub.
+    const resolve = (rel) => new URL(rel, absConfigUrl).href;
+    const systemPromptUrl = resolve(systemPrompt);
+    const schemaFileUrls = (Array.isArray(schemaFiles) ? schemaFiles : [schemaFiles]).map(resolve);
+    const jsonldFileUrls = (
+        jsonldContextFiles
+            ? (Array.isArray(jsonldContextFiles) ? jsonldContextFiles : [jsonldContextFiles])
+            : []
+    ).map(resolve);
 
     let systemPromptText;
     try {
-        const resp = await fetch(systemPrompt);
+        const resp = await fetch(systemPromptUrl);
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         systemPromptText = await resp.text();
     } catch (err) {
@@ -113,7 +126,7 @@ async function fetchAndValidateConfig(configUrl) {
     try {
         await saveConfigRecord({
             id: 'appConfig',
-            configUrl,
+            configUrl: absConfigUrl,
             systemPrompt: systemPromptText,
             schemaFileUrls,
             schemaFiles: parsedSchemas,

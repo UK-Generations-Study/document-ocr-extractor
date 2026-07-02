@@ -21,7 +21,7 @@
  * Idempotent: safe to run repeatedly. `--skip-models` skips the small HF fetch
  * for fast shell iteration when you don't need OCR loaded.
  */
-import { copyFileSync, existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ensurePatchedLayoutModel, ORIGINAL_NAME, PATCHED_NAME } from './patch-layout.mjs';
@@ -137,7 +137,72 @@ function stageWllama() {
     }
 }
 
+/**
+ * Stage the two example schemas (BBD + BrCa) under public/schemas/ so the app
+ * can offer offline-capable "bundled" presets in the setup wizard.
+ *
+ * The source-of-truth stays under examples/bcn_generations_pathology_data/; we
+ * copy the tree verbatim, then REWRITE each config.json's systemPrompt /
+ * schemaFiles / jsonldContextFiles from their absolute raw.githubusercontent
+ * URLs to sibling-relative paths ('./schemas/foo.json' etc.). The app's config
+ * loader resolves those relative to the config URL, so the same file works
+ * whether it's fetched from public/schemas/ (dev/prod build) or from a
+ * GitHub-hosted mirror.
+ */
+function stageSchemas() {
+    const subjects = [
+        {
+            id: 'bbd',
+            src: 'examples/bcn_generations_pathology_data/config/bbd',
+            hasJsonld: false,
+        },
+        {
+            id: 'brca',
+            src: 'examples/bcn_generations_pathology_data/config/brca',
+            hasJsonld: true,
+        },
+    ];
+    for (const s of subjects) {
+        const srcDir = join(ROOT, s.src);
+        const dstDir = join(ROOT, 'public/schemas', s.id);
+        if (!existsSync(srcDir)) {
+            console.warn(`[prepare-build] ${s.src} not found; skipping ${s.id}`);
+            continue;
+        }
+        rmSync(dstDir, { recursive: true, force: true });
+        mkdirSync(join(dstDir, 'schemas'), { recursive: true });
+        // Copy every schema file.
+        for (const f of readdirSync(join(srcDir, 'schemas'))) {
+            copyFileSync(join(srcDir, 'schemas', f), join(dstDir, 'schemas', f));
+        }
+        // JSON-LD contexts (BrCa only).
+        if (s.hasJsonld && existsSync(join(srcDir, 'jsonldContexts'))) {
+            mkdirSync(join(dstDir, 'jsonldContexts'), { recursive: true });
+            for (const f of readdirSync(join(srcDir, 'jsonldContexts'))) {
+                copyFileSync(join(srcDir, 'jsonldContexts', f), join(dstDir, 'jsonldContexts', f));
+            }
+        }
+        // System prompt.
+        copyFileSync(join(srcDir, 'systemPrompt.txt'), join(dstDir, 'systemPrompt.txt'));
+        // Rewrite config.json to reference siblings by relative path.
+        const cfgSrc = JSON.parse(readFileSync(join(srcDir, 'config.json'), 'utf8'));
+        const rewrite = (url) => {
+            // Absolute raw URLs → sibling path. Anything else already-relative.
+            const m = url.match(/\/config\/(bbd|brca)\/(.*)$/);
+            return m ? `./${m[2]}` : url;
+        };
+        const cfgOut = { ...cfgSrc };
+        if (typeof cfgOut.systemPrompt === 'string') cfgOut.systemPrompt = rewrite(cfgOut.systemPrompt);
+        if (Array.isArray(cfgOut.schemaFiles)) cfgOut.schemaFiles = cfgOut.schemaFiles.map(rewrite);
+        else if (typeof cfgOut.schemaFiles === 'string') cfgOut.schemaFiles = rewrite(cfgOut.schemaFiles);
+        if (Array.isArray(cfgOut.jsonldContextFiles)) cfgOut.jsonldContextFiles = cfgOut.jsonldContextFiles.map(rewrite);
+        writeFileSync(join(dstDir, 'config.json'), JSON.stringify(cfgOut, null, 2) + '\n');
+        console.log(`[prepare-build] staged ${s.id} schema tree -> public/schemas/${s.id}/`);
+    }
+}
+
 stageOrt();
 stagePpocrCalibration();
 await stageLayout();
 stageWllama();
+stageSchemas();

@@ -14,16 +14,36 @@
  */
 import { API_PROVIDERS } from '../core/constants.js';
 
+// Bundled URLs point at public/schemas/{bbd,brca}/config.json which
+// scripts/prepare-build.mjs stages on every build. The BASE_URL prefix is
+// substituted at build time by Vite.
+const BUNDLED_BBD_URL = import.meta.env.BASE_URL + 'schemas/bbd/config.json';
+const BUNDLED_BRCA_URL = import.meta.env.BASE_URL + 'schemas/brca/config.json';
+// The main-branch URLs. Useful if you run this app deployed and want to
+// centrally update the schemas via a repo push.
+const GH_MAIN_BBD_URL = 'https://raw.githubusercontent.com/jeyabbalas/medical-report-information-extractor/refs/heads/main/examples/bcn_generations_pathology_data/config/bbd/config.json';
+const GH_MAIN_BRCA_URL = 'https://raw.githubusercontent.com/jeyabbalas/medical-report-information-extractor/refs/heads/main/examples/bcn_generations_pathology_data/config/brca/config.json';
+
 const CONFIG_PRESETS = {
-    bbd: {
-        label: 'Benign Breast Disease (monolithic)',
-        description: 'Single schema of 11 fields for BBD pathology reports.',
-        url: 'https://raw.githubusercontent.com/jeyabbalas/medical-report-information-extractor/refs/heads/main/examples/bcn_generations_pathology_data/config/bbd/config.json',
+    bbdBundled: {
+        label: 'Benign Breast Disease - bundled with this build',
+        description: 'Single schema of 11 fields for BBD pathology reports. Ships in the app; works offline.',
+        url: BUNDLED_BBD_URL,
     },
-    brca: {
-        label: 'Breast Cancer (multi-schema)',
-        description: 'Twelve UK Generations Study schemas covering specimen, IHC, grading, staging, and more.',
-        url: 'https://raw.githubusercontent.com/jeyabbalas/medical-report-information-extractor/refs/heads/main/examples/bcn_generations_pathology_data/config/brca/config.json',
+    brcaBundled: {
+        label: 'Breast Cancer - bundled with this build',
+        description: 'Twelve UK Generations Study schemas covering specimen, IHC, grading, staging, and more. Ships in the app; works offline.',
+        url: BUNDLED_BRCA_URL,
+    },
+    bbdRemote: {
+        label: 'Benign Breast Disease - from GitHub main',
+        description: 'Fetched live from the repository. Requires the repo to be public and reachable.',
+        url: GH_MAIN_BBD_URL,
+    },
+    brcaRemote: {
+        label: 'Breast Cancer - from GitHub main',
+        description: 'Fetched live from the repository. Requires the repo to be public and reachable.',
+        url: GH_MAIN_BRCA_URL,
     },
 };
 
@@ -130,11 +150,13 @@ function renderSchemaStep(body, footer, status) {
     body.innerHTML = `
 <h3 class="text-base font-semibold text-gray-900">Choose a schema</h3>
 <p class="text-sm text-gray-600 mt-1">
-    The schema tells the LLM which fields to extract from each report. Pick a preset or point at your own configuration URL.
+    The schema tells the LLM which fields to extract from each report. Bundled presets work offline; the "from GitHub main" options refetch on every setup.
 </p>
 <div class="mt-4 space-y-3">
-    ${schemaOptionRadio('bbd', CONFIG_PRESETS.bbd.label, CONFIG_PRESETS.bbd.description)}
-    ${schemaOptionRadio('brca', CONFIG_PRESETS.brca.label, CONFIG_PRESETS.brca.description)}
+    ${schemaOptionRadio('bbdBundled', CONFIG_PRESETS.bbdBundled.label, CONFIG_PRESETS.bbdBundled.description)}
+    ${schemaOptionRadio('brcaBundled', CONFIG_PRESETS.brcaBundled.label, CONFIG_PRESETS.brcaBundled.description)}
+    ${schemaOptionRadio('bbdRemote', CONFIG_PRESETS.bbdRemote.label, CONFIG_PRESETS.bbdRemote.description)}
+    ${schemaOptionRadio('brcaRemote', CONFIG_PRESETS.brcaRemote.label, CONFIG_PRESETS.brcaRemote.description)}
     ${schemaOptionRadio('custom', 'Custom URL', 'Point at any config.json that follows the app schema convention.')}
 </div>
 <div id="custom-url-wrap" class="mt-3 hidden">

@@ -32,6 +32,7 @@ private-eye/
 public/ort/
 public/models/
 public/wllama-patched/
+public/schemas/
 
 # Model originals fetched by scripts/prepare-build.mjs and patched into
 # public/models/. Regenerated on demand; the patched copy in public/ is
