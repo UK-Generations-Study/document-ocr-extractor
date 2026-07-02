@@ -9,8 +9,9 @@
  * The whole pane is also a drop zone. Any drop of files, wherever it lands,
  * kicks off the same ingest flow as the picker.
  */
-import { allDocuments, deleteDocument } from '../db.js';
+import { allDocuments, deleteDocument, putDocument } from '../db.js';
 import { ingestFiles } from '../ingest/ingest.js';
+import { combineExtractedData, convertJsonToCsv } from '../results/processor.js';
 
 const MOUNT_ID = 'report-list';
 
@@ -63,6 +64,20 @@ export async function mountReportList(deps) {
         </div>
         <span id="rl-progress-label"></span>
     </div>
+    <div id="rl-export-wrap" class="ml-auto relative">
+        <button id="rl-export" type="button" disabled
+                class="inline-flex items-center gap-1.5 rounded-md border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 shadow-sm hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-4 h-4">
+                <path d="M10.75 2.75a.75.75 0 00-1.5 0v8.614l-2.955-3.129a.75.75 0 10-1.09 1.03l4.25 4.5a.75.75 0 001.09 0l4.25-4.5a.75.75 0 00-1.09-1.03L10.75 11.364V2.75z"/>
+                <path d="M3.5 12.75a.75.75 0 00-1.5 0v2.5A2.75 2.75 0 004.75 18h10.5A2.75 2.75 0 0018 15.25v-2.5a.75.75 0 00-1.5 0v2.5c0 .69-.56 1.25-1.25 1.25H4.75c-.69 0-1.25-.56-1.25-1.25v-2.5z"/>
+            </svg>
+            Export <span id="rl-export-count" class="text-gray-500"></span>
+        </button>
+        <div id="rl-export-menu" class="hidden absolute right-0 mt-1 w-44 rounded-md border border-gray-200 bg-white shadow-lg z-20">
+            <button data-format="csv" class="rl-export-choice block w-full text-left px-3 py-2 text-xs text-gray-700 hover:bg-gray-100">Download CSV</button>
+            <button data-format="json" class="rl-export-choice block w-full text-left px-3 py-2 text-xs text-gray-700 hover:bg-gray-100">Download JSON</button>
+        </div>
+    </div>
 </div>
 <div id="rl-scroll" class="flex-1 overflow-auto"></div>
 `;
@@ -95,6 +110,21 @@ export async function mountReportList(deps) {
     // Redraw the table when selection changes elsewhere (e.g., row deleted).
     deps.selection.subscribe(() => renderRows());
 
+    // Export button + format menu.
+    const exportBtn = mount.querySelector('#rl-export');
+    const exportMenu = mount.querySelector('#rl-export-menu');
+    exportBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        exportMenu.classList.toggle('hidden');
+    });
+    document.addEventListener('click', () => exportMenu.classList.add('hidden'));
+    mount.querySelectorAll('.rl-export-choice').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+            exportMenu.classList.add('hidden');
+            await handleExport(btn.dataset.format);
+        });
+    });
+
     await refresh();
 }
 
@@ -102,6 +132,53 @@ export async function mountReportList(deps) {
 export async function refresh() {
     currentDocs = await allDocuments();
     renderRows();
+    refreshExportAffordance();
+}
+
+function refreshExportAffordance() {
+    const btn = document.getElementById('rl-export');
+    const count = document.getElementById('rl-export-count');
+    if (!btn || !count) return;
+    const eligible = currentDocs.filter((d) => d.status === 'confirmed' || d.status === 'exported').length;
+    btn.disabled = eligible === 0;
+    count.textContent = eligible > 0 ? `(${eligible})` : '';
+}
+
+async function handleExport(format) {
+    const eligible = currentDocs.filter((d) => d.status === 'confirmed' || d.status === 'exported');
+    if (!eligible.length) return;
+    const rows = combineExtractedData(eligible);
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    if (format === 'csv') {
+        const csv = convertJsonToCsv(rows);
+        triggerDownload(`extractions-${stamp}.csv`, 'text/csv', csv);
+    } else {
+        const json = JSON.stringify(rows, null, 2);
+        triggerDownload(`extractions-${stamp}.json`, 'application/json', json);
+    }
+    // Mark each exported doc so the badge reflects the terminal state.
+    // Not idempotent: re-exporting 'exported' docs is fine, this is a no-op.
+    for (const d of eligible) {
+        if (d.status === 'confirmed') {
+            d.status = 'exported';
+            d.exportedAt = Date.now();
+            await putDocument(d);
+        }
+    }
+    await refresh();
+}
+
+function triggerDownload(filename, mime, content) {
+    const blob = new Blob([content], { type: `${mime};charset=utf-8` });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    // Give the browser a beat to start the download before we free the URL.
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 async function ingestAndRefresh(files) {
