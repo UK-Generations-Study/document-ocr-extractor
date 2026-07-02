@@ -5,7 +5,8 @@
 // API provider identifiers
 export const API_PROVIDERS = {
     OPENAI: 'openai',
-    GEMINI: 'gemini'
+    GEMINI: 'gemini',
+    WEBLLM: 'webllm'
 };
 
 // Default LLM configuration

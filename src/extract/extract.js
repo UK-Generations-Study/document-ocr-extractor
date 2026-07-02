@@ -85,28 +85,42 @@ async function tick() {
     }
 }
 
-async function getProvider() {
+async function getProvider(docId) {
     const activeProvider = await getConfigRecord('activeProvider');
     const providerId = activeProvider?.provider || API_PROVIDERS.OPENAI;
     const creds = await getConfigRecord(`llmApiCreds_${providerId}`);
-    if (!creds?.apiKey) throw new Error('LLM credentials not configured (run the setup wizard).');
+    if (providerId !== API_PROVIDERS.WEBLLM && !creds?.apiKey) {
+        throw new Error('LLM credentials not configured (run the setup wizard).');
+    }
 
     // Reuse cached provider if configuration is unchanged.
     if (
         providerCache &&
         providerCache.providerId === providerId &&
-        providerCache.apiKey === creds.apiKey &&
-        providerCache.baseUrl === (creds.baseUrl || '')
+        providerCache.apiKey === (creds?.apiKey || '') &&
+        providerCache.baseUrl === (creds?.baseUrl || '')
     ) {
+        // For WebLLM, wire the progress callback for the *current* doc so
+        // the extraction view can render a bar for this run.
+        if (providerId === API_PROVIDERS.WEBLLM) {
+            providerCache.provider.setLoadProgressCallback?.((report) => {
+                emit({ type: 'load-progress', docId, progress: report.progress, text: report.text });
+            });
+        }
         return providerCache.provider;
     }
 
     const provider = createProvider(providerId, {
-        apiKey: creds.apiKey,
-        baseUrl: creds.baseUrl || '',
+        apiKey: creds?.apiKey || '',
+        baseUrl: creds?.baseUrl || '',
     });
+    if (providerId === API_PROVIDERS.WEBLLM) {
+        provider.setLoadProgressCallback((report) => {
+            emit({ type: 'load-progress', docId, progress: report.progress, text: report.text });
+        });
+    }
     await provider.createClient();
-    providerCache = { provider, providerId, apiKey: creds.apiKey, baseUrl: creds.baseUrl || '' };
+    providerCache = { provider, providerId, apiKey: creds?.apiKey || '', baseUrl: creds?.baseUrl || '' };
     return provider;
 }
 
@@ -144,7 +158,7 @@ async function processDoc(docId) {
 
     let provider;
     try {
-        provider = await getProvider();
+        provider = await getProvider(docId);
     } catch (err) {
         emit({ type: 'doc-error', docId, error: err });
         // Roll status back so the user can fix config and try again.

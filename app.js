@@ -34,6 +34,7 @@ import { API_PROVIDERS, DEFAULT_OPENAI_BASE_URL } from './src/core/constants.js'
 
 import { OpenAI } from 'openai';
 import { GoogleGenAI } from '@google/genai';
+import { WebLLMProvider } from './src/providers/webllm.js';
 
 // =============================================================================
 // LIGHTWEIGHT LLM CLIENT CACHE
@@ -155,8 +156,34 @@ async function validateGeminiKey(apiKey) {
     }
 }
 
+async function listWebllmModels() {
+    // Cheap: no engine load, just the curated list.
+    const p = new WebLLMProvider({});
+    const list = await p.listModels();
+    return list.map((m) => m.id);
+}
+
 async function validateAndSaveCreds(provider, apiKey, baseUrl) {
     let res;
+    if (provider === API_PROVIDERS.WEBLLM) {
+        const modelIds = await listWebllmModels();
+        // Clear stale creds for the other providers so re-opening the wizard
+        // prefills correctly.
+        for (const other of [API_PROVIDERS.OPENAI, API_PROVIDERS.GEMINI]) {
+            await deleteConfigRecord(`llmApiCreds_${other}`);
+        }
+        await saveConfigRecord({
+            id: `llmApiCreds_${API_PROVIDERS.WEBLLM}`,
+            provider: API_PROVIDERS.WEBLLM,
+            // No key/URL. Kept for shape parity with other providers.
+            apiKey: '',
+            baseUrl: '',
+        });
+        await saveConfigRecord({ id: 'activeProvider', provider: API_PROVIDERS.WEBLLM });
+        openaiClient = null;
+        geminiClient = null;
+        return { ok: true, modelIds };
+    }
     if (provider === API_PROVIDERS.GEMINI) {
         res = await validateGeminiKey(apiKey);
         if (res.ok) {
@@ -210,7 +237,11 @@ async function readSetupStatus() {
 
     let credsOk = false;
     let modelIds = [];
-    if (provider === API_PROVIDERS.GEMINI && geminiCreds?.apiKey) {
+    if (provider === API_PROVIDERS.WEBLLM) {
+        // No credential to validate; being the active provider = "creds ok".
+        credsOk = true;
+        modelIds = await listWebllmModels();
+    } else if (provider === API_PROVIDERS.GEMINI && geminiCreds?.apiKey) {
         credsOk = !!geminiClient; // require an active client, else force revalidation
         if (!credsOk) {
             const v = await validateGeminiKey(geminiCreds.apiKey);

@@ -221,9 +221,9 @@ function renderCredsStep(body, footer, status) {
     const initialProvider = status.provider || API_PROVIDERS.OPENAI;
 
     body.innerHTML = `
-<h3 class="text-base font-semibold text-gray-900">API credentials</h3>
+<h3 class="text-base font-semibold text-gray-900">Choose an LLM</h3>
 <p class="text-sm text-gray-600 mt-1">
-    The application uses an LLM to extract fields from OCR'd reports. Choose a provider and enter your API key.
+    Extraction runs against a large-language model. Pick a hosted API (needs a key) or the in-browser option, which runs a small model on this device with no data leaving the machine.
 </p>
 <div class="mt-4 border-b border-gray-200">
     <nav class="-mb-px flex gap-4">
@@ -231,6 +231,8 @@ function renderCredsStep(body, footer, status) {
                 class="creds-tab whitespace-nowrap border-b-2 py-2 px-1 text-sm font-medium">OpenAI / Compatible</button>
         <button type="button" data-provider="${API_PROVIDERS.GEMINI}"
                 class="creds-tab whitespace-nowrap border-b-2 py-2 px-1 text-sm font-medium">Google Gemini</button>
+        <button type="button" data-provider="${API_PROVIDERS.WEBLLM}"
+                class="creds-tab whitespace-nowrap border-b-2 py-2 px-1 text-sm font-medium">In-browser (WebLLM)</button>
     </nav>
 </div>
 <div id="creds-panel-${API_PROVIDERS.OPENAI}" class="creds-panel mt-4 space-y-3">
@@ -250,6 +252,13 @@ function renderCredsStep(body, footer, status) {
         <label for="creds-gemini-key" class="block text-xs font-medium text-gray-700">Gemini API key</label>
         <input type="password" id="creds-gemini-key" placeholder="AIza..."
                class="mt-1 block w-full rounded-md border border-gray-300 px-3 py-1.5 text-sm focus:border-green-600 focus:outline-none focus:ring-1 focus:ring-green-600"/>
+    </div>
+</div>
+<div id="creds-panel-${API_PROVIDERS.WEBLLM}" class="creds-panel mt-4 space-y-3 hidden">
+    <div class="rounded-md border border-purple-200 bg-purple-50 p-3 text-xs text-purple-900 space-y-1">
+        <p><strong>No API key needed.</strong> The model runs entirely in your browser via WebGPU.</p>
+        <p>The first extraction downloads the model (~0.4-2.5 GB depending on the model). Later runs reuse the cached copy.</p>
+        <p>Requires a WebGPU-capable browser (recent Chrome/Edge on desktop are safest).</p>
     </div>
 </div>
 <div id="creds-status" class="mt-3 text-sm hidden"></div>
@@ -293,8 +302,11 @@ function renderCredsStep(body, footer, status) {
     document.getElementById('wizard-back-2').addEventListener('click', () => renderStep(1));
     document.getElementById('wizard-next-2').addEventListener('click', async () => {
         const provider = body.dataset.selectedProvider;
-        let apiKey, baseUrl;
-        if (provider === API_PROVIDERS.GEMINI) {
+        let apiKey = '', baseUrl = '';
+        if (provider === API_PROVIDERS.WEBLLM) {
+            // No key/URL. Skip validation - `validateAndSaveCreds` returns the
+            // curated model list.
+        } else if (provider === API_PROVIDERS.GEMINI) {
             apiKey = geminiKey.value.trim();
             if (!apiKey) { showCredsStatus('Enter your Gemini API key.', false); return; }
         } else {
@@ -303,10 +315,10 @@ function renderCredsStep(body, footer, status) {
             if (!baseUrl) { showCredsStatus('Enter a Base URL.', false); return; }
             if (!apiKey) { showCredsStatus('Enter your API key.', false); return; }
         }
-        showCredsStatus('Validating credentials…', null);
+        showCredsStatus(provider === API_PROVIDERS.WEBLLM ? 'Saving provider…' : 'Validating credentials…', null);
         const res = await deps.validateAndSaveCreds(provider, apiKey, baseUrl);
         if (!res.ok) { showCredsStatus(res.error || 'Credentials rejected.', false); return; }
-        showCredsStatus('Credentials saved.', true);
+        showCredsStatus(provider === API_PROVIDERS.WEBLLM ? 'Provider selected.' : 'Credentials saved.', true);
         await renderStep(3);
     });
 }

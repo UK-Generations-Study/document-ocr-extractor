@@ -24,6 +24,7 @@
   "homepage": "https://github.com/jeyabbalas/medical-report-information-extractor#readme",
   "dependencies": {
     "@google/genai": "^1.34.0",
+    "@mlc-ai/web-llm": "^0.2.84",
     "@types/js-yaml": "^4.0.9",
     "@wllama/wllama": "^3.5.0",
     "ajv": "^8.17.1",

@@ -5,6 +5,7 @@
 
 import { OpenAIProvider } from './openai.js';
 import { GeminiProvider } from './gemini.js';
+import { WebLLMProvider } from './webllm.js';
 import { API_PROVIDERS } from '../core/constants.js';
 
 // Re-export API_PROVIDERS for convenience
@@ -13,7 +14,8 @@ export { API_PROVIDERS };
 // Map of provider IDs to their classes
 const providerClasses = {
     [API_PROVIDERS.OPENAI]: OpenAIProvider,
-    [API_PROVIDERS.GEMINI]: GeminiProvider
+    [API_PROVIDERS.GEMINI]: GeminiProvider,
+    [API_PROVIDERS.WEBLLM]: WebLLMProvider
 };
 
 /**
@@ -45,6 +47,11 @@ export function getAvailableProviders() {
             id: API_PROVIDERS.GEMINI,
             name: 'Google Gemini',
             description: 'Google Gemini API'
+        },
+        {
+            id: API_PROVIDERS.WEBLLM,
+            name: 'In-browser (WebLLM)',
+            description: 'Small on-device LLM via WebGPU. No API key. Documents never leave your machine.'
         }
     ];
 }
@@ -57,7 +64,8 @@ export function getAvailableProviders() {
 export function getProviderDisplayName(providerId) {
     const providers = {
         [API_PROVIDERS.OPENAI]: 'OpenAI',
-        [API_PROVIDERS.GEMINI]: 'Gemini'
+        [API_PROVIDERS.GEMINI]: 'Gemini',
+        [API_PROVIDERS.WEBLLM]: 'WebLLM'
     };
     return providers[providerId] || providerId;
 }

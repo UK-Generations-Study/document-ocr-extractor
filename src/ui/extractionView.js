@@ -38,8 +38,11 @@ export function initExtractionView() {
         if (ev.type === 'schema-start') { st.schemaIndex = ev.schemaIndex; st.schemaCount = ev.schemaCount; st.schemaTitle = ev.schemaTitle; }
         if (ev.type === 'schema-done') { st.completed = (st.completed || 0) + 1; }
         if (ev.type === 'schema-error') { st.completed = (st.completed || 0) + 1; st.lastError = ev.error?.message || String(ev.error); }
-        if (ev.type === 'doc-done') { st.running = false; st.done = true; }
+        if (ev.type === 'doc-done') { st.running = false; st.done = true; st.load = null; }
         if (ev.type === 'doc-error') { st.error = ev.error?.message || String(ev.error); st.running = false; }
+        if (ev.type === 'load-progress') {
+            st.load = { progress: ev.progress, text: ev.text };
+        }
         extractState.set(ev.docId, st);
         if (ownsPane && currentDocId === ev.docId) render();
     });
@@ -106,6 +109,23 @@ function waitingStateHtml(doc) {
 }
 
 function progressHtml(doc, st) {
+    // If a WebLLM load is in flight, that dominates - the model download
+    // and the (empty) extraction share the same UI slot, but downloading
+    // matters more visually.
+    if (st.load && (st.load.progress ?? 0) < 1) {
+        const loadPct = Math.max(1, Math.round((st.load.progress ?? 0) * 100));
+        return `
+<div class="max-w-3xl mx-auto space-y-3">
+    ${headerHtml(doc, { label: 'Loading in-browser model...', tone: 'text-purple-700' })}
+    <div class="border border-purple-200 rounded p-4 bg-purple-50 text-sm text-purple-900 space-y-2">
+        <div>${escapeHtml(st.load.text || 'Downloading and initializing the model.')}</div>
+        <div class="w-full h-1.5 bg-purple-200 rounded overflow-hidden">
+            <div class="h-full bg-purple-500 transition-all" style="width:${loadPct}%"></div>
+        </div>
+        <div class="text-xs text-purple-700">First run only. Later runs reuse the cached model.</div>
+    </div>
+</div>`;
+    }
     const pct = st.schemaCount ? Math.round(((st.completed || 0) / st.schemaCount) * 100) : 5;
     return `
 <div class="max-w-3xl mx-auto space-y-3">
