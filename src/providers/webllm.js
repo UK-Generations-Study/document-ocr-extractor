@@ -111,6 +111,21 @@ export class WebLLMProvider extends BaseLLMProvider {
         const systemPromptContent = this.buildSystemPrompt(systemPrompt, report.content);
         const userQuery = this.buildUserQuery(schema);
 
+        // WebLLM supports grammar-constrained decoding via `response_format`.
+        // With type=json_object + schema, xgrammar restricts every generated
+        // token so the final output is guaranteed valid JSON matching the
+        // target schema. This is the difference between the small Llama /
+        // Qwen models "usually" emitting JSON and "always" doing so.
+        //
+        // Build a shape XGrammar accepts. It doesn't handle draft-2020-12's
+        // full vocabulary (x-* annotations, x-enumDescriptions etc. are
+        // ignored) but the type / enum / pattern / required constraints are
+        // exactly what we want to enforce.
+        const constrainedSchema = extractStructuralSchema(schema);
+        const responseFormat = constrainedSchema
+            ? { type: 'json_object', schema: JSON.stringify(constrainedSchema) }
+            : { type: 'json_object' };
+
         let attempt = 0;
         while (attempt < MAX_RETRIES && !checkTerminated()) {
             try {
@@ -119,19 +134,28 @@ export class WebLLMProvider extends BaseLLMProvider {
                         { role: 'system', content: systemPromptContent },
                         { role: 'user', content: userQuery },
                     ],
+                    response_format: responseFormat,
                 });
                 const message = response.choices?.[0]?.message?.content || '';
-                const extracted = this.extractJsonFromResponse(message);
+                // With response_format=json_object, WebLLM produces bare JSON
+                // (no ```json fences). Try that first; fall back to the
+                // markdown-fenced extractor for any run where the model
+                // slipped a wrapper around it.
+                const extracted = parseLooseJson(message) || this.extractJsonFromResponse(message);
                 if (extracted) return extracted;
                 console.warn(`WebLLM attempt ${attempt + 1}: no valid JSON in response`);
             } catch (err) {
-                // No auth path for WebLLM - just retry, then bubble up.
+                // If xgrammar rejected the schema, drop the constraint and
+                // retry with plain json_object mode - better than nothing.
+                if (attempt === 0 && String(err?.message || err).match(/xgrammar|schema|grammar/i)) {
+                    responseFormat.schema = undefined;
+                    console.warn('WebLLM rejected schema-constrained mode; falling back to plain json_object');
+                    continue;
+                }
                 console.warn(`WebLLM attempt ${attempt + 1} failed:`, err);
             }
             attempt++;
         }
-        // Return empty object rather than throw so the extraction orchestrator
-        // records "no fields found" for this schema and keeps moving.
         return {};
     }
 
@@ -141,4 +165,52 @@ export class WebLLMProvider extends BaseLLMProvider {
         this.client = null;
         this._loadedModel = null;
     }
+}
+
+/**
+ * XGrammar's JSON-Schema support is a subset of draft-2020-12. Strip the
+ * `x-*` annotations we lean on (x-enumDescriptions, x-unit, x-provenance,
+ * x-primaryKey, x-version) and any other unfamiliar top-level keys so the
+ * grammar builder sees only the structural constraints (type / enum / pattern
+ * / required / properties / items). Returns null if the schema is unusable.
+ */
+function extractStructuralSchema(schema) {
+    if (!schema || typeof schema !== 'object') return null;
+    const KNOWN = new Set([
+        'type', 'enum', 'const', 'items', 'properties', 'required',
+        'additionalProperties', 'anyOf', 'oneOf', 'allOf', 'pattern',
+        'minimum', 'maximum', 'minLength', 'maxLength', 'minItems', 'maxItems',
+        'uniqueItems', 'format', '$id', '$schema', 'title', 'description',
+    ]);
+    const strip = (node) => {
+        if (Array.isArray(node)) return node.map(strip);
+        if (!node || typeof node !== 'object') return node;
+        const out = {};
+        for (const [k, v] of Object.entries(node)) {
+            if (k.startsWith('x-')) continue;
+            if (!KNOWN.has(k) && !k.startsWith('$')) continue;
+            out[k] = (typeof v === 'object') ? strip(v) : v;
+        }
+        return out;
+    };
+    return strip(schema);
+}
+
+/**
+ * Best-effort JSON parse of a raw LLM response. Small models sometimes emit
+ * a leading "Here is the extracted data:" preface, or wrap the JSON in
+ * back-tick fences without the `json` hint. Try the raw content first, then
+ * carve out the first `{ ... }` block.
+ */
+function parseLooseJson(text) {
+    if (!text) return null;
+    const trimmed = text.trim();
+    if (!trimmed) return null;
+    try { return JSON.parse(trimmed); } catch { /* try again */ }
+    const first = trimmed.indexOf('{');
+    const last = trimmed.lastIndexOf('}');
+    if (first !== -1 && last > first) {
+        try { return JSON.parse(trimmed.slice(first, last + 1)); } catch { /* give up */ }
+    }
+    return null;
 }
