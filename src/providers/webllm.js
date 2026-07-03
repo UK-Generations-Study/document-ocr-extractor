@@ -176,11 +176,23 @@ export class WebLLMProvider extends BaseLLMProvider {
  */
 function extractStructuralSchema(schema) {
     if (!schema || typeof schema !== 'object') return null;
-    const KNOWN = new Set([
-        'type', 'enum', 'const', 'items', 'properties', 'required',
-        'additionalProperties', 'anyOf', 'oneOf', 'allOf', 'pattern',
-        'minimum', 'maximum', 'minLength', 'maxLength', 'minItems', 'maxItems',
-        'uniqueItems', 'format', '$id', '$schema', 'title', 'description',
+    // Keywords whose values are themselves subschemas that need recursion.
+    const SUBSCHEMA_KEYS = new Set(['items', 'additionalProperties', 'not']);
+    // Keywords whose value is a MAP of name -> subschema. Their child keys
+    // are user-defined field names, not schema keywords, so we recurse into
+    // each value but keep every child key.
+    const SUBSCHEMA_MAP_KEYS = new Set(['properties', 'patternProperties', 'definitions', '$defs']);
+    // Keywords whose value is an ARRAY of subschemas.
+    const SUBSCHEMA_ARRAY_KEYS = new Set(['anyOf', 'oneOf', 'allOf']);
+    // Structural keywords xgrammar understands. Everything else on a schema
+    // node (x-*, custom extensions, unrecognized draft keywords) is dropped.
+    const STRUCTURAL_KEYS = new Set([
+        'type', 'enum', 'const', 'required', 'pattern', 'format',
+        'minimum', 'maximum', 'exclusiveMinimum', 'exclusiveMaximum',
+        'minLength', 'maxLength', 'minItems', 'maxItems', 'uniqueItems',
+        'title', 'description',
+        ...SUBSCHEMA_KEYS, ...SUBSCHEMA_MAP_KEYS, ...SUBSCHEMA_ARRAY_KEYS,
+        '$id', '$schema', '$ref', '$defs',
     ]);
     const strip = (node) => {
         if (Array.isArray(node)) return node.map(strip);
@@ -188,8 +200,19 @@ function extractStructuralSchema(schema) {
         const out = {};
         for (const [k, v] of Object.entries(node)) {
             if (k.startsWith('x-')) continue;
-            if (!KNOWN.has(k) && !k.startsWith('$')) continue;
-            out[k] = (typeof v === 'object') ? strip(v) : v;
+            if (!STRUCTURAL_KEYS.has(k)) continue;
+            if (SUBSCHEMA_MAP_KEYS.has(k) && v && typeof v === 'object' && !Array.isArray(v)) {
+                // Preserve field names; recurse into each subschema value.
+                const mapOut = {};
+                for (const [name, sub] of Object.entries(v)) mapOut[name] = strip(sub);
+                out[k] = mapOut;
+            } else if (SUBSCHEMA_ARRAY_KEYS.has(k) && Array.isArray(v)) {
+                out[k] = v.map(strip);
+            } else if (SUBSCHEMA_KEYS.has(k) && v && typeof v === 'object') {
+                out[k] = strip(v);
+            } else {
+                out[k] = v;
+            }
         }
         return out;
     };
