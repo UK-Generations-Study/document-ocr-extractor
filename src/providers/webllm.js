@@ -184,15 +184,18 @@ function extractStructuralSchema(schema) {
     const SUBSCHEMA_MAP_KEYS = new Set(['properties', 'patternProperties', 'definitions', '$defs']);
     // Keywords whose value is an ARRAY of subschemas.
     const SUBSCHEMA_ARRAY_KEYS = new Set(['anyOf', 'oneOf', 'allOf']);
-    // Structural keywords xgrammar understands. Everything else on a schema
-    // node (x-*, custom extensions, unrecognized draft keywords) is dropped.
+    // Structural keywords xgrammar actually uses when building its GBNF.
+    // Documentation-only keys (title, description, $id, $schema) are dropped
+    // even though they're valid schema — leaving them in dramatically slows
+    // xgrammar's grammar compile on schemas with long descriptions (BBD's
+    // descriptions run 100-500 chars each; multiplied by 11 properties this
+    // is enough to peg the CPU and hang the tab for minutes).
     const STRUCTURAL_KEYS = new Set([
         'type', 'enum', 'const', 'required', 'pattern', 'format',
         'minimum', 'maximum', 'exclusiveMinimum', 'exclusiveMaximum',
         'minLength', 'maxLength', 'minItems', 'maxItems', 'uniqueItems',
-        'title', 'description',
         ...SUBSCHEMA_KEYS, ...SUBSCHEMA_MAP_KEYS, ...SUBSCHEMA_ARRAY_KEYS,
-        '$id', '$schema', '$ref', '$defs',
+        '$ref', '$defs',
     ]);
     const strip = (node) => {
         if (Array.isArray(node)) return node.map(strip);
