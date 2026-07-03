@@ -92,16 +92,18 @@ async function getProvider(docId) {
     if (providerId !== API_PROVIDERS.WEBLLM && !creds?.apiKey) {
         throw new Error('LLM credentials not configured (run the setup wizard).');
     }
+    const ctxWindow = providerId === API_PROVIDERS.WEBLLM
+        ? (Number(creds?.contextWindowSize) || 8192)
+        : null;
 
     // Reuse cached provider if configuration is unchanged.
     if (
         providerCache &&
         providerCache.providerId === providerId &&
         providerCache.apiKey === (creds?.apiKey || '') &&
-        providerCache.baseUrl === (creds?.baseUrl || '')
+        providerCache.baseUrl === (creds?.baseUrl || '') &&
+        providerCache.contextWindowSize === ctxWindow
     ) {
-        // For WebLLM, wire the progress callback for the *current* doc so
-        // the extraction view can render a bar for this run.
         if (providerId === API_PROVIDERS.WEBLLM) {
             providerCache.provider.setLoadProgressCallback?.((report) => {
                 emit({ type: 'load-progress', docId, progress: report.progress, text: report.text });
@@ -113,6 +115,7 @@ async function getProvider(docId) {
     const provider = createProvider(providerId, {
         apiKey: creds?.apiKey || '',
         baseUrl: creds?.baseUrl || '',
+        ...(providerId === API_PROVIDERS.WEBLLM ? { contextWindowSize: ctxWindow } : {}),
     });
     if (providerId === API_PROVIDERS.WEBLLM) {
         provider.setLoadProgressCallback((report) => {
@@ -120,7 +123,13 @@ async function getProvider(docId) {
         });
     }
     await provider.createClient();
-    providerCache = { provider, providerId, apiKey: creds?.apiKey || '', baseUrl: creds?.baseUrl || '' };
+    providerCache = {
+        provider,
+        providerId,
+        apiKey: creds?.apiKey || '',
+        baseUrl: creds?.baseUrl || '',
+        contextWindowSize: ctxWindow,
+    };
     return provider;
 }
 

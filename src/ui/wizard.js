@@ -282,6 +282,14 @@ function renderCredsStep(body, footer, status) {
         <p>The first extraction downloads the model (~0.4-2.5 GB depending on the model). Later runs reuse the cached copy.</p>
         <p>Requires a WebGPU-capable browser (recent Chrome/Edge on desktop are safest).</p>
     </div>
+    <div>
+        <label for="creds-webllm-context" class="block text-xs font-medium text-gray-700">Context window (tokens)</label>
+        <input type="number" id="creds-webllm-context" min="1024" max="131072" step="1024" placeholder="8192"
+               class="mt-1 block w-full rounded-md border border-gray-300 px-3 py-1.5 text-sm focus:border-green-600 focus:outline-none focus:ring-1 focus:ring-green-600"/>
+        <p class="mt-1 text-xs text-gray-500">
+            Total prompt tokens the model accepts. Default 8192. Extraction prompts run ~4-6k tokens for BBD; raise if your reports are longer or you're on multi-schema BrCa. Larger = more GPU memory.
+        </p>
+    </div>
 </div>
 <div id="creds-status" class="mt-3 text-sm hidden"></div>
 `;
@@ -290,9 +298,11 @@ function renderCredsStep(body, footer, status) {
     const openaiBase = body.querySelector('#creds-openai-base');
     const openaiKey = body.querySelector('#creds-openai-key');
     const geminiKey = body.querySelector('#creds-gemini-key');
+    const webllmContext = body.querySelector('#creds-webllm-context');
     if (openaiBase) openaiBase.value = status.openaiBaseUrl || 'https://api.openai.com/v1';
     if (openaiKey) openaiKey.value = status.openaiApiKey || '';
     if (geminiKey) geminiKey.value = status.geminiApiKey || '';
+    if (webllmContext) webllmContext.value = status.webllmContextWindowSize || 8192;
 
     // Tab styling helper.
     const applyTab = (provider) => {
@@ -325,9 +335,16 @@ function renderCredsStep(body, footer, status) {
     document.getElementById('wizard-next-2').addEventListener('click', async () => {
         const provider = body.dataset.selectedProvider;
         let apiKey = '', baseUrl = '';
+        const extras = {};
         if (provider === API_PROVIDERS.WEBLLM) {
-            // No key/URL. Skip validation - `validateAndSaveCreds` returns the
-            // curated model list.
+            // Only extra we collect is the context window (default 8192).
+            const raw = webllmContext?.value?.trim();
+            const parsed = raw ? Number(raw) : 8192;
+            if (!Number.isFinite(parsed) || parsed < 1024) {
+                showCredsStatus('Context window must be a number ≥ 1024.', false);
+                return;
+            }
+            extras.contextWindowSize = parsed;
         } else if (provider === API_PROVIDERS.GEMINI) {
             apiKey = geminiKey.value.trim();
             if (!apiKey) { showCredsStatus('Enter your Gemini API key.', false); return; }
@@ -338,7 +355,7 @@ function renderCredsStep(body, footer, status) {
             if (!apiKey) { showCredsStatus('Enter your API key.', false); return; }
         }
         showCredsStatus(provider === API_PROVIDERS.WEBLLM ? 'Saving provider…' : 'Validating credentials…', null);
-        const res = await deps.validateAndSaveCreds(provider, apiKey, baseUrl);
+        const res = await deps.validateAndSaveCreds(provider, apiKey, baseUrl, extras);
         if (!res.ok) { showCredsStatus(res.error || 'Credentials rejected.', false); return; }
         showCredsStatus(provider === API_PROVIDERS.WEBLLM ? 'Provider selected.' : 'Credentials saved.', true);
         await renderStep(3);

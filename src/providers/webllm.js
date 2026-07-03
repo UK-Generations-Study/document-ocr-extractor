@@ -13,6 +13,14 @@ import { CreateMLCEngine } from '@mlc-ai/web-llm';
 import { BaseLLMProvider } from './base.js';
 import { API_PROVIDERS, MAX_RETRIES } from '../core/constants.js';
 
+/**
+ * Fallback context window when the user hasn't set one. WebLLM's own default
+ * for most compiled binaries is 4096, which the BBD extraction prompt
+ * (system instructions + OCR + schema JSON with x-enumDescriptions) overflows
+ * regularly. 8192 covers a single-page report + BBD comfortably.
+ */
+export const DEFAULT_WEBLLM_CONTEXT = 8192;
+
 /** Curated set of small-to-medium models suitable for structured extraction. */
 const CURATED_MODELS = [
     { id: 'Llama-3.2-1B-Instruct-q4f16_1-MLC', displayName: 'Llama 3.2 1B Instruct (~0.9 GB)' },
@@ -34,6 +42,7 @@ export class WebLLMProvider extends BaseLLMProvider {
         super(config);
         this.name = API_PROVIDERS.WEBLLM;
         this.model = config?.model || null;
+        this.contextWindowSize = Number(config?.contextWindowSize) || DEFAULT_WEBLLM_CONTEXT;
         // Streamed to whoever registers via setLoadProgressCallback (used by
         // the extraction orchestrator so the right pane can show a bar).
         this._onLoadProgress = null;
@@ -62,23 +71,23 @@ export class WebLLMProvider extends BaseLLMProvider {
     }
 
     async ensureEngineFor(modelId) {
-        if (this.client && this._loadedModel === modelId) return this.client;
-        // Switching models = fresh engine. WebLLM's engine.reload() handles
-        // this cleanly.
+        if (this.client && this._loadedModel === modelId && this._loadedContext === this.contextWindowSize) return this.client;
         const initProgressCallback = (report) => {
-            // report = { progress: 0..1, text: 'Fetching param cache...', timeElapsed }
             this._onLoadProgress?.(report);
         };
-        if (this.client && this._loadedModel !== modelId) {
-            try { await this.client.reload(modelId); }
-            catch (err) { /* fall through to a fresh CreateMLCEngine */ this.client = null; }
+        const chatOpts = { context_window_size: this.contextWindowSize };
+        if (this.client && (this._loadedModel !== modelId || this._loadedContext !== this.contextWindowSize)) {
+            try { await this.client.reload(modelId, chatOpts); }
+            catch { this.client = null; }
             if (this.client) {
                 this._loadedModel = modelId;
+                this._loadedContext = this.contextWindowSize;
                 return this.client;
             }
         }
-        this.client = await CreateMLCEngine(modelId, { initProgressCallback });
+        this.client = await CreateMLCEngine(modelId, { initProgressCallback }, chatOpts);
         this._loadedModel = modelId;
+        this._loadedContext = this.contextWindowSize;
         return this.client;
     }
 

@@ -176,7 +176,7 @@ async function listWebllmModels() {
     return list.map((m) => m.id);
 }
 
-async function validateAndSaveCreds(provider, apiKey, baseUrl) {
+async function validateAndSaveCreds(provider, apiKey, baseUrl, extras = {}) {
     let res;
     if (provider === API_PROVIDERS.WEBLLM) {
         const modelIds = await listWebllmModels();
@@ -191,6 +191,7 @@ async function validateAndSaveCreds(provider, apiKey, baseUrl) {
             // No key/URL. Kept for shape parity with other providers.
             apiKey: '',
             baseUrl: '',
+            contextWindowSize: Number(extras.contextWindowSize) || 8192,
         });
         await saveConfigRecord({ id: 'activeProvider', provider: API_PROVIDERS.WEBLLM });
         openaiClient = null;
@@ -246,6 +247,7 @@ async function readSetupStatus() {
     const provider = activeProviderRec?.provider || null;
     const openaiCreds = await getConfigRecord(`llmApiCreds_${API_PROVIDERS.OPENAI}`);
     const geminiCreds = await getConfigRecord(`llmApiCreds_${API_PROVIDERS.GEMINI}`);
+    const webllmCreds = await getConfigRecord(`llmApiCreds_${API_PROVIDERS.WEBLLM}`);
     const modelRec = await getConfigRecord('model');
 
     let credsOk = false;
@@ -286,6 +288,7 @@ async function readSetupStatus() {
         openaiBaseUrl: openaiCreds?.baseUrl || DEFAULT_OPENAI_BASE_URL,
         openaiApiKey: openaiCreds?.apiKey || '',
         geminiApiKey: geminiCreds?.apiKey || '',
+        webllmContextWindowSize: webllmCreds?.contextWindowSize || 8192,
         modelIds,
     };
 }
