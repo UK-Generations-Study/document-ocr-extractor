@@ -16,34 +16,19 @@ import { API_PROVIDERS } from '../core/constants.js';
 
 // Bundled URLs point at public/schemas/{bbd,brca}/config.json which
 // scripts/prepare-build.mjs stages on every build. The BASE_URL prefix is
-// substituted at build time by Vite.
-const BUNDLED_BBD_URL = import.meta.env.BASE_URL + 'schemas/bbd/config.json';
-const BUNDLED_BRCA_URL = import.meta.env.BASE_URL + 'schemas/brca/config.json';
-// The main-branch URLs. Useful if you run this app deployed and want to
-// centrally update the schemas via a repo push.
-const GH_MAIN_BBD_URL = 'https://raw.githubusercontent.com/jeyabbalas/medical-report-information-extractor/refs/heads/main/examples/bcn_generations_pathology_data/config/bbd/config.json';
-const GH_MAIN_BRCA_URL = 'https://raw.githubusercontent.com/jeyabbalas/medical-report-information-extractor/refs/heads/main/examples/bcn_generations_pathology_data/config/brca/config.json';
-
+// substituted at build time by Vite. Anyone who wants a remote-fetched
+// schema (e.g. a centrally-curated version) can paste the URL into the
+// Custom URL field.
 const CONFIG_PRESETS = {
-    bbdBundled: {
-        label: 'Benign Breast Disease - bundled with this build',
-        description: 'Single schema of 11 fields for BBD pathology reports. Ships in the app; works offline.',
-        url: BUNDLED_BBD_URL,
+    bbd: {
+        label: 'Benign Breast Disease',
+        description: 'Single schema of 11 fields for BBD pathology reports.',
+        url: import.meta.env.BASE_URL + 'schemas/bbd/config.json',
     },
-    brcaBundled: {
-        label: 'Breast Cancer - bundled with this build',
-        description: 'Twelve UK Generations Study schemas covering specimen, IHC, grading, staging, and more. Ships in the app; works offline.',
-        url: BUNDLED_BRCA_URL,
-    },
-    bbdRemote: {
-        label: 'Benign Breast Disease - from GitHub main',
-        description: 'Fetched live from the repository. Requires the repo to be public and reachable.',
-        url: GH_MAIN_BBD_URL,
-    },
-    brcaRemote: {
-        label: 'Breast Cancer - from GitHub main',
-        description: 'Fetched live from the repository. Requires the repo to be public and reachable.',
-        url: GH_MAIN_BRCA_URL,
+    brca: {
+        label: 'Breast Cancer',
+        description: 'Twelve UK Generations Study schemas covering specimen, IHC, grading, staging, and more.',
+        url: import.meta.env.BASE_URL + 'schemas/brca/config.json',
     },
 };
 
@@ -99,23 +84,28 @@ export function closeWizard() {
 }
 
 function wizardOverlayHtml() {
+    // Full-screen page-styled setup surface (no modal card, no dark backdrop).
+    // Covers the workspace including the app header - which is fine because
+    // there's nothing meaningful to interact with underneath during setup.
     return `
-<div class="fixed inset-0 z-40 bg-black/50 flex items-center justify-center p-4">
-    <div class="bg-white rounded-lg shadow-xl max-w-2xl w-full max-h-[90vh] flex flex-col">
-        <div class="flex items-center justify-between border-b border-gray-200 px-5 py-3">
+<div class="fixed inset-0 z-40 bg-gray-50 overflow-y-auto">
+    <div class="max-w-2xl mx-auto px-6 pt-8 pb-16">
+        <div class="flex items-baseline justify-between mb-6">
             <div>
-                <h2 class="text-lg font-semibold text-gray-900">Setup</h2>
+                <h1 class="text-xl font-semibold text-gray-900">Setup</h1>
                 <p id="wizard-step-label" class="text-xs text-gray-500 mt-0.5"></p>
             </div>
-            <button id="wizard-close" type="button" class="text-gray-400 hover:text-gray-600 hidden"
+            <button id="wizard-close" type="button"
+                    class="text-sm text-gray-500 hover:text-gray-800 hidden inline-flex items-center gap-1"
                     title="Close" aria-label="Close">
-                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-5 h-5">
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-4 h-4">
                     <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
                 </svg>
+                Close
             </button>
         </div>
-        <div id="wizard-body" class="flex-1 overflow-y-auto px-5 py-4"></div>
-        <div id="wizard-footer" class="border-t border-gray-200 px-5 py-3 flex justify-between items-center bg-gray-50 rounded-b-lg"></div>
+        <div id="wizard-body" class="bg-white rounded-md border border-gray-200 p-6"></div>
+        <div id="wizard-footer" class="mt-4 flex justify-between items-center"></div>
     </div>
 </div>`;
 }
@@ -150,13 +140,11 @@ function renderSchemaStep(body, footer, status) {
     body.innerHTML = `
 <h3 class="text-base font-semibold text-gray-900">Choose a schema</h3>
 <p class="text-sm text-gray-600 mt-1">
-    The schema tells the LLM which fields to extract from each report. Bundled presets work offline; the "from GitHub main" options refetch on every setup.
+    The schema tells the LLM which fields to extract from each report. The two presets ship with the app and work offline; point at your own JSON with Custom URL.
 </p>
 <div class="mt-4 space-y-3">
-    ${schemaOptionRadio('bbdBundled', CONFIG_PRESETS.bbdBundled.label, CONFIG_PRESETS.bbdBundled.description)}
-    ${schemaOptionRadio('brcaBundled', CONFIG_PRESETS.brcaBundled.label, CONFIG_PRESETS.brcaBundled.description)}
-    ${schemaOptionRadio('bbdRemote', CONFIG_PRESETS.bbdRemote.label, CONFIG_PRESETS.bbdRemote.description)}
-    ${schemaOptionRadio('brcaRemote', CONFIG_PRESETS.brcaRemote.label, CONFIG_PRESETS.brcaRemote.description)}
+    ${schemaOptionRadio('bbd', CONFIG_PRESETS.bbd.label, CONFIG_PRESETS.bbd.description)}
+    ${schemaOptionRadio('brca', CONFIG_PRESETS.brca.label, CONFIG_PRESETS.brca.description)}
     ${schemaOptionRadio('custom', 'Custom URL', 'Point at any config.json that follows the app schema convention.')}
 </div>
 <div id="custom-url-wrap" class="mt-3 hidden">

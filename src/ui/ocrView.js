@@ -13,6 +13,8 @@
  * character-precise highlights; wiring them cleanly is a Phase 4b task after
  * Deep Read lands - they share the same uncertainty layer.
  */
+import { micromark } from 'micromark';
+import { gfm, gfmHtml } from 'micromark-extension-gfm';
 import { getDocument, getOcrPagesByDoc, putDocument, putOcrPage } from '../db.js';
 import { enqueueDocument, subscribeQueue } from '../ocr/queue.js';
 import { cancelCurrentDeep, enqueueDeep, subscribeDeepQueue } from '../ocr/deepQueue.js';
@@ -93,7 +95,7 @@ async function renderFor(docId, { force } = {}) {
     const ocrByKey = new Map(ocrPages.map((r) => [r.pageBlobKey, r]));
 
     mount.innerHTML = `
-<div class="max-w-3xl mx-auto space-y-4">
+<div class="w-full space-y-4">
     ${headerHtml(doc, ocrByKey)}
     <div id="ov-pages" class="space-y-4"></div>
 </div>`;
@@ -175,7 +177,7 @@ ${deepButtonHtml(anyDeep, deep)}`;
         case 'extraction-done':
         case 'confirmed':
         case 'exported':
-            statusLine = `<span class="text-green-700">OCR confirmed. Extraction UI arrives in Phase 5.</span>`;
+            statusLine = `<span class="text-green-700">OCR confirmed.</span>`;
             controls = `
 <button id="ov-reopen" type="button"
     class="rounded-md border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50">
@@ -260,21 +262,49 @@ function pageSectionEl(doc, pageIndex, page, ocr) {
     const readonly = ['ocr-confirmed', 'extraction-running', 'extraction-done', 'confirmed', 'exported'].includes(doc.status);
     const initial = ocr?.markdown ?? '';
     const placeholder = ocr ? '' : 'Waiting for OCR&hellip;';
+    const renderedHtml = initial ? micromark(initial, { extensions: [gfm()], htmlExtensions: [gfmHtml()] }) : '';
 
     wrap.innerHTML = `
 <div class="flex items-baseline justify-between px-3 py-1.5 border-b border-gray-100 text-xs text-gray-600">
     <div>Page ${pageIndex + 1}${sourceBadge}${lowConfBadge}</div>
-    <div class="text-gray-400">${page.width} x ${page.height}</div>
+    <div class="flex items-center gap-2">
+        <div class="ov-toggle inline-flex rounded-md ring-1 ring-gray-200 overflow-hidden" role="group">
+            <button type="button" data-mode="rendered" class="ov-mode ov-mode-rendered px-2 py-0.5 text-[11px] font-medium text-gray-700 bg-gray-100">Rendered</button>
+            <button type="button" data-mode="raw" class="ov-mode ov-mode-raw px-2 py-0.5 text-[11px] font-medium text-gray-500 hover:bg-gray-50">Raw</button>
+        </div>
+        <span class="text-gray-400">${page.width} x ${page.height}</span>
+    </div>
 </div>
+<div class="ov-rendered prose prose-sm max-w-none p-4 text-sm leading-relaxed min-h-[8rem]"
+     style="--tw-prose-headings: #111827;">${renderedHtml || `<p class="text-gray-400 italic">${placeholder || 'No OCR text yet.'}</p>`}</div>
 <textarea
     data-page-key="${escapeAttr(page.blobKey)}"
-    class="w-full p-3 text-sm font-mono resize-y focus:outline-none focus:ring-0 min-h-[8rem]"
+    class="ov-raw w-full p-3 text-sm font-mono resize-y focus:outline-none focus:ring-0 min-h-[8rem] hidden"
     rows="10"
     placeholder="${placeholder}"
     ${readonly ? 'readonly' : ''}
 >${escapeHtml(initial)}</textarea>`;
 
-    const ta = wrap.querySelector('textarea');
+    // Wire mode toggle.
+    const rendered = wrap.querySelector('.ov-rendered');
+    const rawTa = wrap.querySelector('.ov-raw');
+    const btnRendered = wrap.querySelector('.ov-mode-rendered');
+    const btnRaw = wrap.querySelector('.ov-mode-raw');
+    const applyMode = (mode) => {
+        const isRaw = mode === 'raw';
+        rendered.classList.toggle('hidden', isRaw);
+        rawTa.classList.toggle('hidden', !isRaw);
+        btnRaw.classList.toggle('bg-gray-100', isRaw);
+        btnRaw.classList.toggle('text-gray-700', isRaw);
+        btnRaw.classList.toggle('text-gray-500', !isRaw);
+        btnRendered.classList.toggle('bg-gray-100', !isRaw);
+        btnRendered.classList.toggle('text-gray-700', !isRaw);
+        btnRendered.classList.toggle('text-gray-500', isRaw);
+    };
+    btnRendered.addEventListener('click', () => applyMode('rendered'));
+    btnRaw.addEventListener('click', () => applyMode('raw'));
+
+    const ta = rawTa;
     // Persist edits on blur so we don't hammer IDB on every keystroke.
     ta.addEventListener('blur', async () => {
         if (readonly) return;
@@ -294,6 +324,11 @@ function pageSectionEl(doc, pageIndex, page, ocr) {
             source: 'edit',
             updatedAt: Date.now(),
         });
+        // Keep the rendered view in sync with the edit so switching modes
+        // shows current content.
+        rendered.innerHTML = nextText
+            ? micromark(nextText, { extensions: [gfm()], htmlExtensions: [gfmHtml()] })
+            : `<p class="text-gray-400 italic">No OCR text yet.</p>`;
     });
 
     return wrap;

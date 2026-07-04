@@ -92,7 +92,7 @@ async function render() {
 
 function waitingStateHtml(doc) {
     return `
-<div class="max-w-3xl mx-auto space-y-3">
+<div class="w-full space-y-3">
     ${headerHtml(doc, { label: 'OCR confirmed - ready to extract.', tone: 'text-green-700', controls: `
 <button id="ex-start" type="button"
     class="rounded-md bg-green-800 px-3 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-green-700">
@@ -115,7 +115,7 @@ function progressHtml(doc, st) {
     if (st.load && (st.load.progress ?? 0) < 1) {
         const loadPct = Math.max(1, Math.round((st.load.progress ?? 0) * 100));
         return `
-<div class="max-w-3xl mx-auto space-y-3">
+<div class="w-full space-y-3">
     ${headerHtml(doc, { label: 'Loading in-browser model...', tone: 'text-purple-700' })}
     <div class="border border-purple-200 rounded p-4 bg-purple-50 text-sm text-purple-900 space-y-2">
         <div>${escapeHtml(st.load.text || 'Downloading and initializing the model.')}</div>
@@ -128,7 +128,7 @@ function progressHtml(doc, st) {
     }
     const pct = st.schemaCount ? Math.round(((st.completed || 0) / st.schemaCount) * 100) : 5;
     return `
-<div class="max-w-3xl mx-auto space-y-3">
+<div class="w-full space-y-3">
     ${headerHtml(doc, { label: 'Extracting fields...', tone: 'text-amber-700' })}
     <div class="border border-amber-200 rounded p-4 bg-amber-50 text-sm text-amber-900 space-y-2">
         <div>${st.schemaTitle ? `Extracting ${escapeHtml(st.schemaTitle)}` : 'Preparing extraction'}
@@ -168,14 +168,14 @@ function formHtml(doc, st, schemas) {
         <div class="text-sm font-medium text-gray-800">${escapeHtml(schema?.title || extraction.schemaTitle || `Schema ${idx + 1}`)}</div>
         ${extraction.error ? `<div class="text-xs text-red-700">${escapeHtml(extraction.error)}</div>` : ''}
     </header>
-    <div class="p-4 space-y-4" data-schema-index="${idx}">
+    <div class="p-4 grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-4" data-schema-index="${idx}">
         ${renderFieldsHtml(schema, extraction.data || {}, confirmed)}
     </div>
 </section>`;
     }).join('');
 
     return `
-<div class="max-w-3xl mx-auto space-y-3">
+<div class="w-full space-y-3">
     ${headerHtml(doc, { ...statusLine, controls })}
     ${bodies || '<div class="text-sm text-gray-500 border border-gray-200 rounded p-4">No extraction data.</div>'}
     ${st.lastError ? `<div class="text-xs text-red-700 border border-red-200 rounded p-3 bg-red-50">${escapeHtml(st.lastError)}</div>` : ''}
@@ -208,42 +208,49 @@ function renderFieldsHtml(schema, data, readonly) {
 function fieldHtml(key, prop, value, readonly) {
     const types = Array.isArray(prop.type) ? prop.type : (prop.type ? [prop.type] : []);
     const nullable = types.includes('null');
-    const desc = prop.description ? `<div class="text-xs text-gray-500 mt-0.5 leading-snug">${escapeHtml(prop.description)}</div>` : '';
-    const unit = prop['x-unit'] ? `<span class="text-xs text-gray-400 ml-2">(${escapeHtml(prop['x-unit'])})</span>` : '';
-    const labelHtml = `<label class="block text-sm font-medium text-gray-800">${escapeHtml(key)}${unit}</label>${desc}`;
+    const unit = prop['x-unit'] ? `<span class="text-xs text-gray-400 ml-1">(${escapeHtml(prop['x-unit'])})</span>` : '';
+    const info = prop.description ? infoIconHtml(prop.description) : '';
+    const labelHtml = `<div class="flex items-center gap-1 mb-1">
+        <label class="text-sm font-medium text-gray-800">${escapeHtml(key)}${unit}</label>
+        ${info}
+    </div>`;
 
-    // enum (string or number) - <select>.
+    // enum (string or number) - <select>. x-enumDescriptions become per-option
+    // tooltips on the <option>, plus a legend button next to the field.
     if (Array.isArray(prop.enum)) {
-        const options = prop.enum.map((v) => {
+        const enumDescs = Array.isArray(prop['x-enumDescriptions']) ? prop['x-enumDescriptions'] : [];
+        const options = prop.enum.map((v, i) => {
             const label = v === null ? '(null)' : String(v);
             const selected = value === v || (value == null && v == null) ? 'selected' : '';
-            return `<option value="${v === null ? '__null__' : escapeAttr(String(v))}" ${selected}>${escapeHtml(label)}</option>`;
+            const optTitle = enumDescs[i] ? ` title="${escapeAttr(enumDescs[i])}"` : '';
+            return `<option value="${v === null ? '__null__' : escapeAttr(String(v))}" ${selected}${optTitle}>${escapeHtml(label)}</option>`;
         }).join('');
-        const enumDescs = prop['x-enumDescriptions'];
-        const enumDescHtml = Array.isArray(enumDescs)
-            ? `<details class="mt-1"><summary class="text-xs text-gray-500 cursor-pointer select-none">what each value means</summary><ul class="mt-1 pl-4 list-disc text-xs text-gray-500 space-y-0.5">${enumDescs.map((d) => `<li>${escapeHtml(d)}</li>`).join('')}</ul></details>`
-            : '';
+        const legend = enumDescs.length ? enumLegendHtml(prop.enum, enumDescs) : '';
         return `
-<div class="space-y-1" data-field="${escapeAttr(key)}" data-kind="enum">
+<div data-field="${escapeAttr(key)}" data-kind="enum">
     ${labelHtml}
-    <select class="ex-input w-full rounded-md border border-gray-300 px-3 py-1.5 text-sm focus:border-green-600 focus:outline-none focus:ring-1 focus:ring-green-600" ${readonly ? 'disabled' : ''}>
-        ${options}
-    </select>
-    ${enumDescHtml}
+    <div class="flex items-center gap-1">
+        <select class="ex-input flex-1 rounded-md border border-gray-300 px-2 py-1 text-sm focus:border-green-600 focus:outline-none focus:ring-1 focus:ring-green-600" ${readonly ? 'disabled' : ''}>
+            ${options}
+        </select>
+        ${legend}
+    </div>
 </div>`;
     }
 
-    // array<enum> - a tag list with each enum value being toggleable.
+    // array<enum> - toggle-chip list. x-enumDescriptions become chip title tooltips.
     if (types.includes('array') && prop.items?.enum) {
         const current = Array.isArray(value) ? new Set(value) : new Set();
-        const chips = prop.items.enum.map((v) => {
+        const itemDescs = Array.isArray(prop.items['x-enumDescriptions']) ? prop.items['x-enumDescriptions'] : [];
+        const chips = prop.items.enum.map((v, i) => {
             const on = current.has(v);
+            const title = itemDescs[i] ? ` title="${escapeAttr(itemDescs[i])}"` : '';
             return `<button type="button" data-arr-val="${escapeAttr(String(v))}"
                 class="ex-chip rounded-md border ${on ? 'bg-green-100 border-green-400 text-green-800' : 'bg-white border-gray-300 text-gray-700'} px-2 py-1 text-xs"
-                ${readonly ? 'disabled' : ''}>${escapeHtml(String(v))}</button>`;
+                ${readonly ? 'disabled' : ''}${title}>${escapeHtml(String(v))}</button>`;
         }).join(' ');
         return `
-<div class="space-y-1" data-field="${escapeAttr(key)}" data-kind="array-enum">
+<div data-field="${escapeAttr(key)}" data-kind="array-enum">
     ${labelHtml}
     <div class="flex flex-wrap gap-1">${chips}</div>
 </div>`;
@@ -258,9 +265,9 @@ function fieldHtml(key, prop, value, readonly) {
                 { v: '__null__', label: '(null)', match: value == null },
             ].map((o) => `<option value="${o.v}" ${o.match ? 'selected' : ''}>${escapeHtml(o.label)}</option>`).join('');
             return `
-<div class="space-y-1" data-field="${escapeAttr(key)}" data-kind="bool-nullable">
+<div data-field="${escapeAttr(key)}" data-kind="bool-nullable">
     ${labelHtml}
-    <select class="ex-input w-full rounded-md border border-gray-300 px-3 py-1.5 text-sm focus:border-green-600 focus:outline-none focus:ring-1 focus:ring-green-600" ${readonly ? 'disabled' : ''}>${opts}</select>
+    <select class="ex-input w-full rounded-md border border-gray-300 px-2 py-1 text-sm focus:border-green-600 focus:outline-none focus:ring-1 focus:ring-green-600" ${readonly ? 'disabled' : ''}>${opts}</select>
 </div>`;
         }
         return `
@@ -275,23 +282,47 @@ function fieldHtml(key, prop, value, readonly) {
         const step = types.includes('integer') ? '1' : 'any';
         const val = value == null ? '' : String(value);
         return `
-<div class="space-y-1" data-field="${escapeAttr(key)}" data-kind="number">
+<div data-field="${escapeAttr(key)}" data-kind="number">
     ${labelHtml}
     <input type="number" step="${step}" value="${escapeAttr(val)}"
-        class="ex-input w-full rounded-md border border-gray-300 px-3 py-1.5 text-sm focus:border-green-600 focus:outline-none focus:ring-1 focus:ring-green-600"
-        ${readonly ? 'readonly' : ''} placeholder="${nullable ? '(leave blank for null)' : ''}"/>
+        class="ex-input w-full rounded-md border border-gray-300 px-2 py-1 text-sm focus:border-green-600 focus:outline-none focus:ring-1 focus:ring-green-600"
+        ${readonly ? 'readonly' : ''} placeholder="${nullable ? '(blank = null)' : ''}"/>
 </div>`;
     }
 
     // string (no enum) - text input; blank means null when nullable.
     const val = value == null ? '' : String(value);
     return `
-<div class="space-y-1" data-field="${escapeAttr(key)}" data-kind="string">
+<div data-field="${escapeAttr(key)}" data-kind="string">
     ${labelHtml}
     <input type="text" value="${escapeAttr(val)}"
-        class="ex-input w-full rounded-md border border-gray-300 px-3 py-1.5 text-sm focus:border-green-600 focus:outline-none focus:ring-1 focus:ring-green-600"
-        ${readonly ? 'readonly' : ''} placeholder="${nullable ? '(leave blank for null)' : ''}"/>
+        class="ex-input w-full rounded-md border border-gray-300 px-2 py-1 text-sm focus:border-green-600 focus:outline-none focus:ring-1 focus:ring-green-600"
+        ${readonly ? 'readonly' : ''} placeholder="${nullable ? '(blank = null)' : ''}"/>
 </div>`;
+}
+
+/**
+ * Small info icon whose native `title` attribute surfaces the description
+ * on hover. Focusable so keyboard users see it too.
+ */
+function infoIconHtml(text) {
+    return `<button type="button" tabindex="0"
+        class="ex-info inline-flex items-center justify-center w-4 h-4 rounded-full bg-gray-100 text-gray-500 hover:bg-gray-200 hover:text-gray-700 text-[10px] font-semibold"
+        title="${escapeAttr(text)}"
+        aria-label="Field description">i</button>`;
+}
+
+/** Info button whose tooltip lists each enum value + its description. */
+function enumLegendHtml(values, descs) {
+    // Compose "VALUE: description\n..." into a single title attribute.
+    const lines = values.map((v, i) => {
+        const label = v === null ? '(null)' : String(v);
+        return descs[i] ? `${label}: ${descs[i]}` : label;
+    }).join('\n');
+    return `<button type="button" tabindex="0"
+        class="ex-info inline-flex items-center justify-center w-4 h-4 rounded-full bg-gray-100 text-gray-500 hover:bg-gray-200 hover:text-gray-700 text-[10px] font-semibold"
+        title="${escapeAttr(lines)}"
+        aria-label="Value meanings">i</button>`;
 }
 
 function genericFieldHtml(key, value, readonly) {
