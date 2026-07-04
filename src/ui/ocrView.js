@@ -15,12 +15,20 @@
  */
 import { micromark } from 'micromark';
 import { gfm, gfmHtml } from 'micromark-extension-gfm';
+import TurndownService from 'turndown';
 import { getDocument, getOcrPagesByDoc, putDocument, putOcrPage } from '../db.js';
 import { enqueueDocument, subscribeQueue } from '../ocr/queue.js';
 import { cancelCurrentDeep, enqueueDeep, subscribeDeepQueue } from '../ocr/deepQueue.js';
 
 const MOUNT_ID = 'work-surface';
 const LOW_CONF_THRESHOLD = 0.6;
+
+const turndown = new TurndownService({
+    headingStyle: 'atx',
+    codeBlockStyle: 'fenced',
+    emDelimiter: '*',
+    bulletListMarker: '-',
+});
 
 let currentDocId = null;
 let unsubQueue = null;
@@ -275,7 +283,8 @@ function pageSectionEl(doc, pageIndex, page, ocr) {
         <span class="text-gray-400">${page.width} x ${page.height}</span>
     </div>
 </div>
-<div class="ov-rendered prose prose-sm max-w-none p-4 text-sm leading-relaxed min-h-[8rem]"
+<div class="ov-rendered prose prose-sm max-w-none p-4 text-sm leading-relaxed min-h-[8rem] focus:outline-none focus:bg-green-50/30"
+     ${readonly ? '' : 'contenteditable="true" spellcheck="false"'}
      style="--tw-prose-headings: #111827;">${renderedHtml || `<p class="text-gray-400 italic">${placeholder || 'No OCR text yet.'}</p>`}</div>
 <textarea
     data-page-key="${escapeAttr(page.blobKey)}"
@@ -305,6 +314,28 @@ function pageSectionEl(doc, pageIndex, page, ocr) {
     btnRaw.addEventListener('click', () => applyMode('raw'));
 
     const ta = rawTa;
+    // Rendered pane: on blur, convert the (possibly-edited) HTML back to
+    // markdown, mirror it into the raw textarea, and persist.
+    if (!readonly) {
+        rendered.addEventListener('blur', async () => {
+            const nextMd = turndown.turndown(rendered.innerHTML).trim();
+            if (nextMd === (rawTa.value || '').trim()) return;
+            rawTa.value = nextMd;
+            await putOcrPage({
+                pageBlobKey: page.blobKey,
+                docId: doc.id,
+                markdown: nextMd,
+                blocks: ocr?.blocks || [],
+                uncertainty: ocr?.uncertainty || null,
+                width: ocr?.width ?? page.width,
+                height: ocr?.height ?? page.height,
+                stageMs: ocr?.stageMs || {},
+                totalMs: ocr?.totalMs || 0,
+                source: 'edit',
+                updatedAt: Date.now(),
+            });
+        });
+    }
     // Persist edits on blur so we don't hammer IDB on every keystroke.
     ta.addEventListener('blur', async () => {
         if (readonly) return;

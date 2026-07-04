@@ -26,6 +26,7 @@ import { mountReportList, refresh as refreshReportList } from './src/ui/reportLi
 import { mountReportViewer } from './src/ui/reportViewer.js';
 import { initOcrView, releaseOcrPane, showOcrFor } from './src/ui/ocrView.js';
 import { initExtractionView, releaseExtractionPane, showExtractionFor } from './src/ui/extractionView.js';
+import { initTooltip } from './src/ui/tooltip.js';
 import { getDocument } from './src/db.js';
 import { enqueueDocument, primeQueueFromDb, recoverStuckDocuments, subscribeQueue } from './src/ocr/queue.js';
 import { enqueueExtraction, primeExtractionFromDb, recoverStuckExtraction, subscribeExtract } from './src/extract/extract.js';
@@ -398,6 +399,7 @@ async function mountWorkspace() {
 
 async function init() {
     ui('app');
+    initTooltip();
     bindGearIcon();
     await mountWorkspace();
 

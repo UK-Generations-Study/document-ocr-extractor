@@ -34,11 +34,12 @@ export function initExtractionView() {
     subscribeExtract((ev) => {
         if (!ev.docId) return;
         const st = extractState.get(ev.docId) || {};
-        if (ev.type === 'doc-start') { st.running = true; st.done = false; st.error = null; st.completed = 0; }
-        if (ev.type === 'schema-start') { st.schemaIndex = ev.schemaIndex; st.schemaCount = ev.schemaCount; st.schemaTitle = ev.schemaTitle; }
+        if (ev.type === 'doc-start') { st.running = true; st.done = false; st.error = null; st.completed = 0; st.tokens = null; }
+        if (ev.type === 'schema-start') { st.schemaIndex = ev.schemaIndex; st.schemaCount = ev.schemaCount; st.schemaTitle = ev.schemaTitle; st.tokens = null; }
+        if (ev.type === 'schema-tokens') { st.tokens = { inputTokens: ev.inputTokens, outputTokens: ev.outputTokens }; }
         if (ev.type === 'schema-done') { st.completed = (st.completed || 0) + 1; }
         if (ev.type === 'schema-error') { st.completed = (st.completed || 0) + 1; st.lastError = ev.error?.message || String(ev.error); }
-        if (ev.type === 'doc-done') { st.running = false; st.done = true; st.load = null; }
+        if (ev.type === 'doc-done') { st.running = false; st.done = true; st.load = null; st.tokens = null; }
         if (ev.type === 'doc-error') { st.error = ev.error?.message || String(ev.error); st.running = false; }
         if (ev.type === 'load-progress') {
             st.load = { progress: ev.progress, text: ev.text };
@@ -127,12 +128,22 @@ function progressHtml(doc, st) {
 </div>`;
     }
     const pct = st.schemaCount ? Math.round(((st.completed || 0) / st.schemaCount) * 100) : 5;
+    const tokens = st.tokens;
+    const tokenLine = tokens
+        ? `<div class="text-xs text-amber-800 font-mono">
+               in: ${tokens.inputTokens != null ? tokens.inputTokens : '…'} tok
+               &middot; out: ${tokens.outputTokens != null ? tokens.outputTokens : 0} tok
+           </div>`
+        : '';
     return `
 <div class="w-full space-y-3">
     ${headerHtml(doc, { label: 'Extracting fields...', tone: 'text-amber-700' })}
     <div class="border border-amber-200 rounded p-4 bg-amber-50 text-sm text-amber-900 space-y-2">
-        <div>${st.schemaTitle ? `Extracting ${escapeHtml(st.schemaTitle)}` : 'Preparing extraction'}
-            ${st.schemaCount ? ` (${(st.completed || 0)} / ${st.schemaCount} schemas)` : ''}</div>
+        <div class="flex items-center justify-between gap-2">
+            <div>${st.schemaTitle ? `Extracting ${escapeHtml(st.schemaTitle)}` : 'Preparing extraction'}
+                ${st.schemaCount ? ` (${(st.completed || 0)} / ${st.schemaCount} schemas)` : ''}</div>
+            ${tokenLine}
+        </div>
         <div class="w-full h-1.5 bg-amber-200 rounded overflow-hidden">
             <div class="h-full bg-amber-500 transition-all" style="width:${pct}%"></div>
         </div>
@@ -244,10 +255,10 @@ function fieldHtml(key, prop, value, readonly) {
         const itemDescs = Array.isArray(prop.items['x-enumDescriptions']) ? prop.items['x-enumDescriptions'] : [];
         const chips = prop.items.enum.map((v, i) => {
             const on = current.has(v);
-            const title = itemDescs[i] ? ` title="${escapeAttr(itemDescs[i])}"` : '';
+            const tip = itemDescs[i] ? ` data-tooltip="${escapeAttr(itemDescs[i])}"` : '';
             return `<button type="button" data-arr-val="${escapeAttr(String(v))}"
                 class="ex-chip rounded-md border ${on ? 'bg-green-100 border-green-400 text-green-800' : 'bg-white border-gray-300 text-gray-700'} px-2 py-1 text-xs"
-                ${readonly ? 'disabled' : ''}${title}>${escapeHtml(String(v))}</button>`;
+                ${readonly ? 'disabled' : ''}${tip}>${escapeHtml(String(v))}</button>`;
         }).join(' ');
         return `
 <div data-field="${escapeAttr(key)}" data-kind="array-enum">
@@ -302,26 +313,26 @@ function fieldHtml(key, prop, value, readonly) {
 }
 
 /**
- * Small info icon whose native `title` attribute surfaces the description
+ * Small info icon that reveals a prettier custom tooltip (src/ui/tooltip.js)
  * on hover. Focusable so keyboard users see it too.
  */
 function infoIconHtml(text) {
     return `<button type="button" tabindex="0"
         class="ex-info inline-flex items-center justify-center w-4 h-4 rounded-full bg-gray-100 text-gray-500 hover:bg-gray-200 hover:text-gray-700 text-[10px] font-semibold"
-        title="${escapeAttr(text)}"
+        data-tooltip="${escapeAttr(text)}"
         aria-label="Field description">i</button>`;
 }
 
-/** Info button whose tooltip lists each enum value + its description. */
+/** Info button whose tooltip renders enum values + descriptions as a
+ *  two-column definition list. */
 function enumLegendHtml(values, descs) {
-    // Compose "VALUE: description\n..." into a single title attribute.
-    const lines = values.map((v, i) => {
-        const label = v === null ? '(null)' : String(v);
-        return descs[i] ? `${label}: ${descs[i]}` : label;
-    }).join('\n');
+    const lines = values.map((v, i) => [
+        v === null ? '(null)' : String(v),
+        descs[i] || '',
+    ]);
     return `<button type="button" tabindex="0"
         class="ex-info inline-flex items-center justify-center w-4 h-4 rounded-full bg-gray-100 text-gray-500 hover:bg-gray-200 hover:text-gray-700 text-[10px] font-semibold"
-        title="${escapeAttr(lines)}"
+        data-tooltip-lines="${escapeAttr(JSON.stringify(lines))}"
         aria-label="Value meanings">i</button>`;
 }
 

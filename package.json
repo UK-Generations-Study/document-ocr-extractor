@@ -40,7 +40,8 @@
     "onnxruntime-common": "1.26.0",
     "onnxruntime-web": "1.26.0",
     "openai": "^6.15.0",
-    "pdfjs-dist": "^4.10.38"
+    "pdfjs-dist": "^4.10.38",
+    "turndown": "^7.2.4"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.1.18",

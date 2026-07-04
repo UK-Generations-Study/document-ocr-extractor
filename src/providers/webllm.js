@@ -59,6 +59,13 @@ export class WebLLMProvider extends BaseLLMProvider {
         this._onLoadProgress = fn;
     }
 
+    /** Streamed token counter: called with {inputTokens?, outputTokens} while a
+     *  chatCompletion is in flight. `inputTokens` may be undefined until the
+     *  final chunk arrives. */
+    setTokenUsageCallback(fn) {
+        this._onTokenUsage = fn;
+    }
+
     /**
      * Create (or reuse) an engine loaded with the given model. Called both
      * from the setup path (to pre-warm) and from chatCompletion (to make the
@@ -129,19 +136,40 @@ export class WebLLMProvider extends BaseLLMProvider {
         let attempt = 0;
         while (attempt < MAX_RETRIES && !checkTerminated()) {
             try {
-                const response = await engine.chat.completions.create({
+                // Stream so we can surface a growing output-token count while
+                // the model decodes. include_usage=true asks WebLLM to send a
+                // final usage chunk with the definitive prompt+completion
+                // token totals.
+                const stream = await engine.chat.completions.create({
                     messages: [
                         { role: 'system', content: systemPromptContent },
                         { role: 'user', content: userQuery },
                     ],
                     response_format: responseFormat,
+                    stream: true,
+                    stream_options: { include_usage: true },
                 });
-                const message = response.choices?.[0]?.message?.content || '';
+                let content = '';
+                let outputTokens = 0;
+                let inputTokens;
+                for await (const chunk of stream) {
+                    const delta = chunk.choices?.[0]?.delta?.content;
+                    if (delta) {
+                        content += delta;
+                        outputTokens++; // one delta per token in WebLLM streams
+                        this._onTokenUsage?.({ inputTokens, outputTokens });
+                    }
+                    if (chunk.usage) {
+                        inputTokens = chunk.usage.prompt_tokens ?? inputTokens;
+                        outputTokens = chunk.usage.completion_tokens ?? outputTokens;
+                        this._onTokenUsage?.({ inputTokens, outputTokens });
+                    }
+                }
                 // With response_format=json_object, WebLLM produces bare JSON
                 // (no ```json fences). Try that first; fall back to the
                 // markdown-fenced extractor for any run where the model
                 // slipped a wrapper around it.
-                const extracted = parseLooseJson(message) || this.extractJsonFromResponse(message);
+                const extracted = parseLooseJson(content) || this.extractJsonFromResponse(content);
                 if (extracted) return extracted;
                 console.warn(`WebLLM attempt ${attempt + 1}: no valid JSON in response`);
             } catch (err) {

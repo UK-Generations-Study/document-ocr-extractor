@@ -108,6 +108,9 @@ async function getProvider(docId) {
             providerCache.provider.setLoadProgressCallback?.((report) => {
                 emit({ type: 'load-progress', docId, progress: report.progress, text: report.text });
             });
+            providerCache.provider.setTokenUsageCallback?.((usage) => {
+                emit({ type: 'schema-tokens', docId, inputTokens: usage.inputTokens, outputTokens: usage.outputTokens });
+            });
         }
         return providerCache.provider;
     }
@@ -120,6 +123,9 @@ async function getProvider(docId) {
     if (providerId === API_PROVIDERS.WEBLLM) {
         provider.setLoadProgressCallback((report) => {
             emit({ type: 'load-progress', docId, progress: report.progress, text: report.text });
+        });
+        provider.setTokenUsageCallback((usage) => {
+            emit({ type: 'schema-tokens', docId, inputTokens: usage.inputTokens, outputTokens: usage.outputTokens });
         });
     }
     await provider.createClient();
