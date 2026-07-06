@@ -22,6 +22,11 @@ npm-debug.log*
 .env.local
 .env.*.local
 
+# Local input data (metadata.csv + BBD_Path_Reports/...) - user-provided
+# pathology data that should never be committed. Contains the fixtures
+# for the metadata-CSV ingest path.
+input_data/
+
 # On-disk reference to the private-eye OCR project.
 # Its Quick Read pipeline is ported into src/ocr/ (Phase 1); this
 # directory stays as a source-of-truth reference but is not tracked here.

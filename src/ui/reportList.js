@@ -11,6 +11,7 @@
  */
 import { allDocuments, deleteDocument, putDocument } from '../db.js';
 import { ingestFiles } from '../ingest/ingest.js';
+import { ingestFromMetadata } from '../ingest/metadataIngest.js';
 import { combineExtractedData, convertJsonToCsv } from '../results/processor.js';
 
 const MOUNT_ID = 'report-list';
@@ -55,8 +56,16 @@ export async function mountReportList(deps) {
         Upload files
     </label>
     <input id="rl-file-input" type="file" multiple accept="${ACCEPTED_EXT}" class="sr-only"/>
+    <label for="rl-metadata-input"
+           class="cursor-pointer inline-flex items-center gap-1.5 rounded-md border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 shadow-sm hover:bg-gray-50">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-4 h-4">
+            <path fill-rule="evenodd" d="M2 4.75A2.75 2.75 0 014.75 2h3.5A2.75 2.75 0 0111 4.75v0h4.25A2.75 2.75 0 0118 7.5v7.75A2.75 2.75 0 0115.25 18H4.75A2.75 2.75 0 012 15.25V4.75zM4.75 3.5A1.25 1.25 0 003.5 4.75v10.5c0 .69.56 1.25 1.25 1.25h10.5c.69 0 1.25-.56 1.25-1.25V7.5a1.25 1.25 0 00-1.25-1.25H10.25A1.75 1.75 0 018.5 4.5v-.25A.75.75 0 007.75 3.5H4.75z" clip-rule="evenodd"/>
+        </svg>
+        Load from metadata CSV
+    </label>
+    <input id="rl-metadata-input" type="file" webkitdirectory directory multiple class="sr-only"/>
     <span id="rl-hint" class="text-xs text-gray-500">
-        each upload becomes one report - PDFs auto-form; multiple images group into one report
+        upload one report per drop, or pick a folder with metadata.csv to load a batch
     </span>
     <div id="rl-progress" class="hidden ml-auto flex items-center gap-2 text-xs text-gray-600">
         <div class="w-32 h-1.5 bg-gray-200 rounded overflow-hidden">
@@ -89,6 +98,14 @@ export async function mountReportList(deps) {
         const files = Array.from(input.files);
         input.value = '';
         await ingestAndRefresh(files);
+    });
+
+    const metadataInput = mount.querySelector('#rl-metadata-input');
+    metadataInput.addEventListener('change', async () => {
+        if (!metadataInput.files?.length) return;
+        const files = Array.from(metadataInput.files);
+        metadataInput.value = '';
+        await ingestMetadataAndRefresh(files);
     });
 
     // Whole pane is drop-target. Prevent default on all four events so the
@@ -181,6 +198,33 @@ function triggerDownload(filename, mime, content) {
     setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+async function ingestMetadataAndRefresh(files) {
+    const progress = document.getElementById('rl-progress');
+    const bar = document.getElementById('rl-progress-bar');
+    const label = document.getElementById('rl-progress-label');
+    progress?.classList.remove('hidden');
+    try {
+        const { docIds, missing, skipped } = await ingestFromMetadata(files, ({ stage, done, total, message }) => {
+            const pct = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 100;
+            if (bar) bar.style.width = pct + '%';
+            if (label) label.textContent = message ? `${stage}: ${message}` : stage;
+        });
+        await refresh();
+        if (docIds.length && selectionRef) selectionRef.setSelected(docIds[0]);
+        if (skipped || (missing && missing.length)) {
+            const details = missing.map((m) => `${m.tcode} · ${m.docid}${m.pages?.length ? ` (pages ${m.pages.join(', ')})` : ''}`).join('\n');
+            alert(`Loaded ${docIds.length} reports.` +
+                (skipped ? ` ${skipped} row${skipped === 1 ? '' : 's'} skipped (no matching files).` : '') +
+                (missing.length ? `\n\nMissing pages:\n${details}` : ''));
+        }
+    } catch (err) {
+        console.error('[metadata-ingest] failed', err);
+        alert(`Metadata ingest failed: ${err?.message || err}`);
+    } finally {
+        setTimeout(() => progress?.classList.add('hidden'), 300);
+    }
+}
+
 async function ingestAndRefresh(files) {
     const progress = document.getElementById('rl-progress');
     const bar = document.getElementById('rl-progress-bar');
@@ -264,9 +308,18 @@ function rowHtml(doc, isSelected) {
     const rowCls = isSelected
         ? 'cursor-pointer bg-green-50 hover:bg-green-50'
         : 'cursor-pointer hover:bg-gray-50';
+    // Metadata-ingested docs get a two-line label: TCode + "CB_DOCID · yearmonth".
+    // Manually-uploaded docs still show their filename.
+    const m = doc.metadata;
+    const nameCell = m
+        ? `<td class="px-3 py-2 max-w-[24rem]">
+                <div class="text-gray-900 font-medium">${escapeHtml(m.tcode || doc.name)}</div>
+                <div class="text-xs text-gray-500">${escapeHtml(m.docid || '')}${m.yearmonthLabel ? ` · ${escapeHtml(m.yearmonthLabel)}` : ''}</div>
+            </td>`
+        : `<td class="px-3 py-2 text-gray-900 truncate max-w-[24rem]" title="${escapeHtml(doc.name)}">${escapeHtml(doc.name)}</td>`;
     return `
 <tr data-doc-id="${doc.id}" class="${rowCls}">
-    <td class="px-3 py-2 text-gray-900 truncate max-w-[24rem]" title="${escapeHtml(doc.name)}">${escapeHtml(doc.name)}</td>
+    ${nameCell}
     <td class="px-3 py-2 text-gray-600">${doc.pages?.length ?? 0}</td>
     <td class="px-3 py-2">
         <span class="inline-flex items-center rounded-md px-2 py-0.5 text-xs ring-1 ring-inset ${status.cls}">${status.label}</span>
