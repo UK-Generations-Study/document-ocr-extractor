@@ -137,12 +137,14 @@ async function renderFor(docId, { force } = {}) {
     if (force && keepScroll) mount.scrollTop = keepScroll;
 }
 
-/** Per-kind box styling: amber = weak recognition, dashed sky = text outside
- *  the recognized layout (typical for scribbles/noise), red = model conflict. */
+/** Per-kind region styling: amber = weak recognition, sky = text outside the
+ *  recognized layout (typical for scribbles/noise), red = model conflict.
+ *  A soft translucent wash only - no outline, no border. Hard strokes around
+ *  the region made the flagged text harder to read than the tint itself. */
 const OVERLAY_STYLES = {
-    'low-conf': 'ring-2 ring-amber-400/90 bg-amber-300/20 hover:bg-amber-300/40',
-    'coverage-gap': 'border-2 border-dashed border-sky-500/80 bg-sky-300/15 hover:bg-sky-300/30',
-    'disagreement': 'ring-2 ring-red-500/90 bg-red-300/20 hover:bg-red-300/40',
+    'low-conf': 'bg-amber-300/25 hover:bg-amber-300/40',
+    'coverage-gap': 'bg-sky-300/25 hover:bg-sky-300/40',
+    'disagreement': 'bg-red-300/25 hover:bg-red-300/40',
 };
 
 /** Boxes over the page image marking every OCR region needing attention. */

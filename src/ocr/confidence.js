@@ -1,7 +1,7 @@
 /**
  * Shared "needs a human look" heuristics over the OCR uncertainty layer
  * (src/ocr/structure/uncertainty.ts). Used by the OCR review view (per-page
- * badge + in-text highlights), the report viewer (position overlays on the
+ * badge), the report viewer (position overlays on the
  * page image), and the OCR queue (doc-level flag driving the 'flagged'
  * review mode's auto-confirm decision).
  *
@@ -43,7 +43,7 @@ function lineConfidence(line) {
 
 /**
  * Everything on one page the abstractor should look at, with page-pixel
- * boxes for overlays and the implicated text for in-text highlighting.
+ * boxes for overlays and the implicated text for tooltips.
  * @returns {Array<{kind: 'low-conf'|'coverage-gap'|'disagreement',
  *                  box: object|null, text: string, conf: number|null, tip: string}>}
  */
@@ -65,22 +65,19 @@ export function attentionRegions(uncertainty) {
             box: line.box || null,
             text: line.text || '',
             conf: conf ?? worst,
-            tip: `Low OCR confidence (${shown}%): ${line.text || ''}`,
+            tip: `Low OCR confidence (${shown}%)`,
         });
     }
 
     const gaps = Array.isArray(uncertainty.coverageGaps) ? uncertainty.coverageGaps : [];
     for (const gap of gaps) {
         const texts = (gap.lineIds || []).map((i) => lines[i]?.text).filter(Boolean);
-        const text = texts.join(' ');
         out.push({
             kind: 'coverage-gap',
             box: gap.box || null,
-            text,
+            text: texts.join(' '),
             conf: null,
-            tip: text
-                ? `Text outside the recognized layout - check it was captured correctly: ${text}`
-                : 'Possible content here that the layout analysis could not place.',
+            tip: 'Text outside the recognized layout - check it was captured correctly.',
         });
     }
 

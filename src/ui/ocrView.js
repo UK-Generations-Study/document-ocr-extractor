@@ -323,7 +323,7 @@ function pageSectionEl(doc, pageIndex, page, ocr) {
     const regions = attentionRegions(ocr?.uncertainty);
     const lowConfBadge = regions.length > 0
         ? `<span class="ml-2 inline-flex items-center rounded bg-yellow-50 text-yellow-800 ring-1 ring-inset ring-yellow-300 px-1.5 py-0.5 text-[10px]"
-                 title="Highlighted in the text below and boxed on the page image">${regions.length} to check</span>`
+                 title="Outlined on the page image in the report pane">${regions.length} to check</span>`
         : '';
     const sourceBadge = ocr?.source === 'deep'
         ? `<span class="ml-2 inline-flex items-center rounded bg-purple-50 text-purple-800 ring-1 ring-inset ring-purple-300 px-1.5 py-0.5 text-[10px]">deep</span>`
@@ -363,7 +363,6 @@ function pageSectionEl(doc, pageIndex, page, ocr) {
     // Wire mode toggle.
     const rendered = wrap.querySelector('.ov-rendered');
     const rawTa = wrap.querySelector('.ov-raw');
-    highlightRegions(rendered, regions);
     const btnRendered = wrap.querySelector('.ov-mode-rendered');
     const btnRaw = wrap.querySelector('.ov-mode-raw');
     const applyMode = (mode) => {
@@ -427,62 +426,9 @@ function pageSectionEl(doc, pageIndex, page, ocr) {
         rendered.innerHTML = nextText
             ? micromark(nextText, { extensions: [gfm()], htmlExtensions: [gfmHtml()] })
             : `<p class="text-gray-400 italic">No OCR text yet.</p>`;
-        highlightRegions(rendered, regions);
     });
 
     return wrap;
-}
-
-// ---------- in-text attention highlighting ----------
-
-/**
- * Mark each attention region's text inside the rendered-markdown view so the
- * abstractor sees WHERE to check without cross-referencing the page image.
- * Matching is text-node based: the OCR line text (or its prefix, when inline
- * formatting split the line) is located and wrapped in a <mark>. Regions
- * whose text can't be found (e.g. dropped by layout assembly) simply don't
- * get an in-text mark - the page-image overlay still shows them.
- */
-function highlightRegions(rendered, regions) {
-    if (!rendered || !regions?.length) return;
-    for (const r of regions) {
-        const needle = (r.text || '').trim();
-        if (needle.length < 4) continue;
-        if (markMatch(rendered, needle, r)) continue;
-        // Inline formatting may split the line across nodes; try a prefix.
-        const prefix = needle.slice(0, 24).trim();
-        if (prefix.length >= 8) markMatch(rendered, prefix, r);
-    }
-}
-
-const MARK_CLASSES = {
-    'low-conf': 'ov-attention',
-    'coverage-gap': 'ov-attention ov-attention--gap',
-    'disagreement': 'ov-attention ov-attention--disagree',
-};
-
-/** Wrap the first text-node occurrence of `needle` in a titled <mark>. */
-function markMatch(rendered, needle, region) {
-    const walker = document.createTreeWalker(rendered, NodeFilter.SHOW_TEXT);
-    let node;
-    while ((node = walker.nextNode())) {
-        if (node.parentElement?.closest('mark')) continue;
-        const idx = node.data.indexOf(needle);
-        if (idx < 0) continue;
-        const range = document.createRange();
-        range.setStart(node, idx);
-        range.setEnd(node, idx + needle.length);
-        const mark = document.createElement('mark');
-        mark.className = MARK_CLASSES[region.kind] || MARK_CLASSES['low-conf'];
-        mark.title = region.tip;
-        try {
-            range.surroundContents(mark);
-            return true;
-        } catch {
-            return false; // partially-intersecting nodes; fall back to overlay only
-        }
-    }
-    return false;
 }
 
 function renderEmpty(mount) {
