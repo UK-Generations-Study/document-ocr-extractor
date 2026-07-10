@@ -46,6 +46,24 @@ export async function getPdfPageCount(pdf: Blob): Promise<number> {
   }
 }
 
+/**
+ * Open a PDF once and rasterize any number of its pages from the same parse.
+ * Ingest uses this instead of rasterizePdfPage so an n-page PDF is parsed
+ * once, not n times. Call destroy() when done.
+ */
+export async function openPdfForRaster(pdf: Blob): Promise<{
+  numPages: number;
+  rasterizePage: (pageNo: number, fixedScale?: number) => Promise<RasterResult>;
+  destroy: () => void;
+}> {
+  const doc = await openPdf(pdf);
+  return {
+    numPages: doc.numPages,
+    rasterizePage: (pageNo, fixedScale) => rasterizeFromDoc(doc, pageNo, fixedScale),
+    destroy: () => { void doc.destroy(); },
+  };
+}
+
 export interface RasterResult {
   blob: Blob;
   width: number;
@@ -62,35 +80,39 @@ export interface RasterResult {
 export async function rasterizePdfPage(pdf: Blob, pageNo: number, fixedScale?: number): Promise<RasterResult> {
   const doc = await openPdf(pdf);
   try {
-    if (pageNo < 1 || pageNo > doc.numPages) {
-      throw decodeError(`page ${pageNo} out of range (1..${doc.numPages})`);
-    }
-    const page = await doc.getPage(pageNo);
-
-    let scale = fixedScale ?? pickScale(page.getViewport({ scale: 1 }));
-    const viewport = page.getViewport({ scale });
-    const width = Math.max(1, Math.ceil(viewport.width));
-    const height = Math.max(1, Math.ceil(viewport.height));
-
-    const canvas = new OffscreenCanvas(width, height);
-    const cctx = canvas.getContext('2d', { alpha: false });
-    if (!cctx) throw decodeError('could not acquire a 2D canvas context for PDF rendering');
-    // Flatten transparency onto white "paper" so the OCR sees a clean scan.
-    cctx.fillStyle = '#ffffff';
-    cctx.fillRect(0, 0, width, height);
-
-    await page.render({
-      // OffscreenCanvas 2D context is API-compatible with pdf.js's expectations.
-      canvasContext: cctx as unknown as CanvasRenderingContext2D,
-      viewport,
-    }).promise;
-    page.cleanup();
-
-    const blob = await canvas.convertToBlob({ type: 'image/png' });
-    return { blob, width, height, scale };
+    return await rasterizeFromDoc(doc, pageNo, fixedScale);
   } finally {
     void doc.destroy();
   }
+}
+
+async function rasterizeFromDoc(doc: PDFDocumentProxy, pageNo: number, fixedScale?: number): Promise<RasterResult> {
+  if (pageNo < 1 || pageNo > doc.numPages) {
+    throw decodeError(`page ${pageNo} out of range (1..${doc.numPages})`);
+  }
+  const page = await doc.getPage(pageNo);
+
+  const scale = fixedScale ?? pickScale(page.getViewport({ scale: 1 }));
+  const viewport = page.getViewport({ scale });
+  const width = Math.max(1, Math.ceil(viewport.width));
+  const height = Math.max(1, Math.ceil(viewport.height));
+
+  const canvas = new OffscreenCanvas(width, height);
+  const cctx = canvas.getContext('2d', { alpha: false });
+  if (!cctx) throw decodeError('could not acquire a 2D canvas context for PDF rendering');
+  // Flatten transparency onto white "paper" so the OCR sees a clean scan.
+  cctx.fillStyle = '#ffffff';
+  cctx.fillRect(0, 0, width, height);
+
+  await page.render({
+    // OffscreenCanvas 2D context is API-compatible with pdf.js's expectations.
+    canvasContext: cctx as unknown as CanvasRenderingContext2D,
+    viewport,
+  }).promise;
+  page.cleanup();
+
+  const blob = await canvas.convertToBlob({ type: 'image/png' });
+  return { blob, width, height, scale };
 }
 
 /** Pixel-budget scale: aim for ~2000 px on the long edge, clamped, MP-capped. */

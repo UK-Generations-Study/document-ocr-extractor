@@ -1,8 +1,13 @@
 import { openDB } from 'idb';
 
+// One connection per session: openDB() creates a fresh IndexedDB connection
+// every call, and the helpers below run dozens of times per second during
+// OCR. Cache the open promise so every helper shares a single connection.
+let dbPromise = null;
 
-async function getOrCreateDB() {
-    return openDB('medical-report-information-extractor-db', 3, {
+function getOrCreateDB() {
+    if (dbPromise) return dbPromise;
+    dbPromise = openDB('medical-report-information-extractor-db', 3, {
         upgrade(db, oldVersion) {
             // v1 stores.
             // "config" store: system prompt, JSON schemas, JSON-LD contexts, LLM API credentials.
@@ -44,6 +49,7 @@ async function getOrCreateDB() {
             }
         }
     });
+    return dbPromise;
 }
 
 /*

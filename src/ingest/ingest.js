@@ -20,8 +20,15 @@
  *   'saving'    - writing to IndexedDB
  *   'done'
  */
-import { getPdfPageCount, rasterizePdfPage } from '../ocr/orchestrate/pdf-raster.ts';
+import { openPdfForRaster } from '../ocr/orchestrate/pdf-raster.ts';
 import { putBlob, putDocument } from '../db.js';
+import { emitAppEvent } from '../core/bus.js';
+
+/** Persist a new doc and announce it so app.js routes it into the OCR queue. */
+async function saveNewDocument(doc) {
+    await putDocument(doc);
+    emitAppEvent({ source: 'ingest', type: 'status', docId: doc.id, status: doc.status });
+}
 
 /** File extensions we treat as PDFs. */
 const PDF_EXT = /\.pdf$/i;
@@ -81,15 +88,14 @@ export async function ingestFiles(files, onProgress) {
         // Silently drop unknown types; the picker's `accept` should have filtered them.
     }
 
-    // Pre-compute total unit-of-work count for progress: sum of PDF page counts +
-    // one unit per image. We compute PDF page counts first (opens each PDF just
-    // for numPages; the pdf-raster helper closes it).
+    // Open each PDF once and keep the parsed document around for its page
+    // rasters: re-parsing per page made an n-page PDF O(n²) to ingest.
     emit('reading', 0, files.length, 'reading files…');
-    const pdfPageCounts = [];
+    const pdfDocs = [];
     for (const pdf of pdfs) {
-        pdfPageCounts.push(await getPdfPageCount(pdf));
+        pdfDocs.push(await openPdfForRaster(pdf));
     }
-    const totalPages = pdfPageCounts.reduce((a, b) => a + b, 0) + images.length;
+    const totalPages = pdfDocs.reduce((a, d) => a + d.numPages, 0) + images.length;
 
     let done = 0;
     const docIds = [];
@@ -97,19 +103,24 @@ export async function ingestFiles(files, onProgress) {
     // Process each PDF as its own document.
     for (let i = 0; i < pdfs.length; i++) {
         const pdf = pdfs[i];
-        const pageCount = pdfPageCounts[i];
+        const pdfDoc = pdfDocs[i];
+        const pageCount = pdfDoc.numPages;
         const docId = uid('doc');
         const pdfBlobKey = uid('src');
         await putBlob(pdfBlobKey, pdf);
 
         const pages = [];
-        for (let p = 1; p <= pageCount; p++) {
-            emit('rasterizing', done, totalPages, `${pdf.name} page ${p} of ${pageCount}`);
-            const { blob, width, height, scale } = await rasterizePdfPage(pdf, p);
-            const pageKey = uid('page');
-            await putBlob(pageKey, blob);
-            pages.push({ blobKey: pageKey, width, height, sourceIdx: 0, sourcePage: p, scale });
-            done++;
+        try {
+            for (let p = 1; p <= pageCount; p++) {
+                emit('rasterizing', done, totalPages, `${pdf.name} page ${p} of ${pageCount}`);
+                const { blob, width, height, scale } = await pdfDoc.rasterizePage(p);
+                const pageKey = uid('page');
+                await putBlob(pageKey, blob);
+                pages.push({ blobKey: pageKey, width, height, sourceIdx: 0, sourcePage: p, scale });
+                done++;
+            }
+        } finally {
+            pdfDoc.destroy();
         }
 
         emit('saving', done, totalPages, `saving ${pdf.name}…`);
@@ -121,7 +132,7 @@ export async function ingestFiles(files, onProgress) {
             sources: [{ kind: 'pdf', filename: pdf.name, blobKey: pdfBlobKey, pageCount }],
             pages,
         };
-        await putDocument(doc);
+        await saveNewDocument(doc);
         docIds.push(docId);
     }
 
@@ -153,7 +164,7 @@ export async function ingestFiles(files, onProgress) {
             sources,
             pages,
         };
-        await putDocument(doc);
+        await saveNewDocument(doc);
         docIds.push(docId);
     }
 

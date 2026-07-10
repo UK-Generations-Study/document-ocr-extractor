@@ -21,7 +21,9 @@
  * subtitle under the field label.
  */
 import { getConfigRecord, getDocument, putDocument } from '../db.js';
-import { enqueueExtraction, subscribeExtract } from '../extract/extract.js';
+import { onAppEvent, emitAppEvent } from '../core/bus.js';
+import { setDocumentStatus } from '../core/status.js';
+import { confirmExtraction } from './reviewFlow.js';
 
 const MOUNT_ID = 'work-surface';
 
@@ -29,10 +31,12 @@ let currentDocId = null;
 // Per-doc scratchpad of extraction lifecycle info (progress, error).
 const extractState = new Map();
 let ownsPane = false;
+// An event arrived while the user was editing a field; render on focusout.
+let pendingRender = false;
 
 export function initExtractionView() {
-    subscribeExtract((ev) => {
-        if (!ev.docId) return;
+    onAppEvent((ev) => {
+        if (ev.source !== 'extract' || !ev.docId) return;
         const st = extractState.get(ev.docId) || {};
         if (ev.type === 'doc-start') { st.running = true; st.done = false; st.error = null; st.completed = 0; st.tokens = null; }
         if (ev.type === 'schema-start') { st.schemaIndex = ev.schemaIndex; st.schemaCount = ev.schemaCount; st.schemaTitle = ev.schemaTitle; st.tokens = null; }
@@ -45,19 +49,50 @@ export function initExtractionView() {
             st.load = { progress: ev.progress, text: ev.text };
         }
         extractState.set(ev.docId, st);
-        if (ownsPane && currentDocId === ev.docId) render();
+        if (ownsPane && currentDocId === ev.docId) requestRender();
     });
+
+    // Deferred renders fire once focus leaves the field being edited, after a
+    // short delay so the field's blur-persist commits first.
+    document.getElementById(MOUNT_ID)?.addEventListener('focusout', () => {
+        if (!ownsPane || !pendingRender) return;
+        setTimeout(() => {
+            if (!ownsPane || !pendingRender) return;
+            const mount = document.getElementById(MOUNT_ID);
+            if (mount && paneHasFocusedEditor(mount)) return;
+            pendingRender = false;
+            render();
+        }, 200);
+    });
+}
+
+function paneHasFocusedEditor(mount) {
+    const ae = document.activeElement;
+    return !!(ae && mount.contains(ae) &&
+        (ae.tagName === 'TEXTAREA' || ae.tagName === 'INPUT' || ae.tagName === 'SELECT' || ae.isContentEditable));
+}
+
+/** Re-render for a queue event - unless the user is mid-edit in this pane. */
+function requestRender() {
+    const mount = document.getElementById(MOUNT_ID);
+    if (mount && paneHasFocusedEditor(mount)) {
+        pendingRender = true;
+        return;
+    }
+    render();
 }
 
 /** Called by the workPane router when the extraction view should be visible. */
 export async function showExtractionFor(docId) {
     ownsPane = true;
+    pendingRender = false;
     currentDocId = docId;
     await render();
 }
 
 export function releaseExtractionPane() {
     ownsPane = false;
+    pendingRender = false;
     currentDocId = null;
 }
 
@@ -68,20 +103,28 @@ async function render() {
     const doc = await getDocument(currentDocId);
     if (!doc || currentDocId !== doc.id) return;
 
-    mount.classList.remove('items-center', 'justify-center');
-    mount.classList.add('items-stretch');
+    mount.classList.remove('flex', 'items-center', 'justify-center');
 
     const st = extractState.get(doc.id) || {};
 
-    // ocr-confirmed shows a "waiting to start" state; extraction-running
-    // shows progress; extraction-done / confirmed / exported show the form.
+    // ocr-confirmed shows a "queued" state (extraction starts on its own);
+    // extraction-running shows progress; extraction-failed shows the error;
+    // extraction-done / confirmed / exported show the form.
     if (doc.status === 'ocr-confirmed' && !st.running) {
         mount.innerHTML = waitingStateHtml(doc);
         wireStartHandlers(mount, doc);
+        wireViewToggle(mount, doc);
         return;
     }
     if (doc.status === 'extraction-running' || st.running) {
         mount.innerHTML = progressHtml(doc, st);
+        wireViewToggle(mount, doc);
+        return;
+    }
+    if (doc.status === 'extraction-failed') {
+        mount.innerHTML = failedStateHtml(doc);
+        wireFailedHandlers(mount, doc);
+        wireViewToggle(mount, doc);
         return;
     }
     // Fetch the schemas from appConfig so the form can render typed inputs.
@@ -89,22 +132,48 @@ async function render() {
     const schemas = appConfig?.schemaFiles || [];
     mount.innerHTML = formHtml(doc, st, schemas);
     wireFormHandlers(mount, doc);
+    wireViewToggle(mount, doc);
+}
+
+/** "View text": flip the work pane to the (read-only) OCR view without
+ *  touching the document's status. app.js owns the override. */
+function wireViewToggle(mount, doc) {
+    mount.querySelector('#ex-view-ocr')?.addEventListener('click', () => {
+        emitAppEvent({ source: 'ui', type: 'set-pane', docId: doc.id, pane: 'ocr' });
+    });
 }
 
 function waitingStateHtml(doc) {
     return `
 <div class="w-full space-y-3">
-    ${headerHtml(doc, { label: 'OCR confirmed - ready to extract.', tone: 'text-green-700', controls: `
-<button id="ex-start" type="button"
+    ${headerHtml(doc, { label: 'Text confirmed - extraction is queued.', tone: 'text-green-700', controls: `
+<button id="ex-reopen" type="button"
+    class="rounded-md border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50">
+    Reopen text
+</button>`})}
+    <div class="text-sm text-gray-600 border border-gray-200 rounded p-4 bg-gray-50 flex items-center gap-2">
+        <span class="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse"></span>
+        Waiting for extraction to start. The confirmed text will be sent to the configured LLM once per schema.
+    </div>
+</div>`;
+}
+
+function failedStateHtml(doc) {
+    return `
+<div class="w-full space-y-3">
+    ${headerHtml(doc, { label: 'Extraction failed.', tone: 'text-red-700', controls: `
+<button id="ex-retry-failed" type="button"
     class="rounded-md bg-green-800 px-3 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-green-700">
-    Extract fields
+    Retry extraction
 </button>
 <button id="ex-reopen" type="button"
     class="rounded-md border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50">
-    Reopen OCR
+    Reopen text
 </button>`})}
-    <div class="text-sm text-gray-600 border border-gray-200 rounded p-4 bg-gray-50">
-        The confirmed OCR text will be sent to the configured LLM once per schema.
+    <div class="text-sm text-red-800 border border-red-200 rounded p-4 bg-red-50">
+        <div class="font-medium">This report could not be extracted.</div>
+        <div class="mt-1">${escapeHtml(doc.lastError || 'Unknown error.')}</div>
+        <div class="mt-2 text-xs text-red-700">Fix the cause (for example the provider settings), then retry.</div>
     </div>
 </div>`;
 }
@@ -130,10 +199,7 @@ function progressHtml(doc, st) {
     const pct = st.schemaCount ? Math.round(((st.completed || 0) / st.schemaCount) * 100) : 5;
     const tokens = st.tokens;
     const tokenLine = tokens
-        ? `<div class="text-xs text-amber-800 font-mono">
-               in: ${tokens.inputTokens != null ? tokens.inputTokens : '…'} tok
-               &middot; out: ${tokens.outputTokens != null ? tokens.outputTokens : 0} tok
-           </div>`
+        ? `<div class="text-xs text-amber-800 font-mono">${tokens.outputTokens != null ? tokens.outputTokens : 0} tok</div>`
         : '';
     return `
 <div class="w-full space-y-3">
@@ -160,8 +226,9 @@ function formHtml(doc, st, schemas) {
                 Reopen for edit
             </button>`
         : `<button id="ex-confirm" type="button"
+                title="Approve the extracted fields and mark this report done (Enter)"
                 class="rounded-md bg-green-800 px-3 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-green-700">
-                Confirm extraction
+                Confirm fields
             </button>
             <button id="ex-rerun" type="button"
                 class="rounded-md border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50">
@@ -169,8 +236,8 @@ function formHtml(doc, st, schemas) {
             </button>`;
 
     const statusLine = confirmed
-        ? { label: 'Extraction confirmed.', tone: 'text-green-700' }
-        : { label: 'Extraction complete - review and edit.', tone: 'text-amber-700' };
+        ? { label: 'Fields confirmed.', tone: 'text-green-700' }
+        : { label: 'Check the extracted fields, then confirm.', tone: 'text-amber-700' };
 
     const bodies = (doc.extractions || []).map((extraction, idx) => {
         const schema = schemas[extraction.schemaId] || schemas[idx] || null;
@@ -194,13 +261,22 @@ function formHtml(doc, st, schemas) {
 }
 
 function headerHtml(doc, { label, tone, controls }) {
+    // "View text" is always present so the abstractor can flip to the OCR
+    // text (read-only) at any stage; matches the viewer/OCR pane header
+    // metrics (min-h-16) so the panes' first pages align.
+    const viewTextBtn = `
+<button id="ex-view-ocr" type="button"
+    title="Show this report's OCR text (read-only; use Reopen there to edit and re-extract)"
+    class="rounded-md border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50">
+    View text
+</button>`;
     return `
-<div class="sticky top-0 z-10 -mx-4 px-4 py-2 bg-white/90 backdrop-blur border-b border-gray-200 flex items-center justify-between">
-    <div class="text-xs text-gray-500 truncate">${escapeHtml(doc.name)}</div>
-    <div class="flex items-center gap-2">
-        <span class="text-xs ${tone || 'text-gray-500'}">${label}</span>
-        ${controls || ''}
+<div class="sticky top-0 z-10 -mx-4 px-4 h-16 bg-white/90 backdrop-blur border-b border-gray-200 flex flex-col justify-center gap-1">
+    <div class="flex items-baseline gap-2 min-w-0 text-xs">
+        <span class="text-gray-500 truncate shrink-0 max-w-[40%]">${escapeHtml(doc.metadata?.tcode || doc.name)}</span>
+        <span class="truncate ${tone || 'text-gray-500'}">${label}</span>
     </div>
+    <div class="flex items-center gap-2 flex-nowrap overflow-x-auto [&>button]:whitespace-nowrap [&>button]:shrink-0">${controls || ''}${viewTextBtn}</div>
 </div>`;
 }
 
@@ -363,39 +439,34 @@ function genericFieldHtml(key, value, readonly) {
 // ---------- handlers ----------
 
 function wireStartHandlers(mount, doc) {
-    mount.querySelector('#ex-start')?.addEventListener('click', () => {
-        enqueueExtraction(doc.id);
+    // Status changes go through setDocumentStatus so bus routing fires (the
+    // router swaps panes; 'ocr-confirmed' re-queues extraction).
+    mount.querySelector('#ex-reopen')?.addEventListener('click', async () => {
+        await setDocumentStatus(doc.id, 'ocr-done');
+    });
+}
+
+function wireFailedHandlers(mount, doc) {
+    mount.querySelector('#ex-retry-failed')?.addEventListener('click', async () => {
+        await setDocumentStatus(doc.id, 'ocr-confirmed', { lastError: null });
+        render();
     });
     mount.querySelector('#ex-reopen')?.addEventListener('click', async () => {
-        const d = await getDocument(doc.id);
-        if (!d) return;
-        d.status = 'ocr-done';
-        await putDocument(d);
-        // The router will notice the status flip and swap back to the OCR view.
+        await setDocumentStatus(doc.id, 'ocr-done', { lastError: null });
     });
 }
 
 function wireFormHandlers(mount, doc) {
     mount.querySelector('#ex-confirm')?.addEventListener('click', async () => {
-        const d = await getDocument(doc.id);
-        if (!d) return;
-        d.status = 'confirmed';
-        await putDocument(d);
+        await confirmExtraction(doc.id);
         render();
     });
     mount.querySelector('#ex-reopen-confirmed')?.addEventListener('click', async () => {
-        const d = await getDocument(doc.id);
-        if (!d) return;
-        d.status = 'extraction-done';
-        await putDocument(d);
+        await setDocumentStatus(doc.id, 'extraction-done');
         render();
     });
     mount.querySelector('#ex-rerun')?.addEventListener('click', async () => {
-        const d = await getDocument(doc.id);
-        if (!d) return;
-        d.status = 'ocr-confirmed';
-        await putDocument(d);
-        enqueueExtraction(doc.id);
+        await setDocumentStatus(doc.id, 'ocr-confirmed');
         render();
     });
 

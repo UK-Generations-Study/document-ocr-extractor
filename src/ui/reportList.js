@@ -1,39 +1,48 @@
 /**
- * Bottom-pane report list.
+ * Left-sidebar report queue.
  *
- * Renders into #report-list. A thin toolbar at the top holds the Upload
- * button + an ingest progress readout; below that is the report table:
- * name, page count, status badge, and a delete action. Clicking a row
- * calls `selection.setSelected(id)` so the left pane can update.
+ * Renders into #report-list: a toolbar (add files / CSV batch / export), a
+ * search box, status filter chips with live counts (the batch dashboard), a
+ * contextual batch action (Confirm all / Retry all), and the scrolling row
+ * list. Clicking a row selects the document for the viewer + work panes.
  *
- * The whole pane is also a drop zone. Any drop of files, wherever it lands,
- * kicks off the same ingest flow as the picker.
+ * The whole sidebar is also a drop zone: any file drop starts the same
+ * ingest flow as the picker.
+ *
+ * Auto-advance: reviewFlow.js emits `{ type: 'advance', fromStatus }` after a
+ * confirm; we move the selection to the next visible document in the same
+ * review stage so the abstractor lands on their next unit of work.
  */
-import { allDocuments, deleteDocument, putDocument } from '../db.js';
+import { allDocuments, deleteDocument } from '../db.js';
+import { onAppEvent, emitAppEvent } from '../core/bus.js';
+import { STATUS_META, setDocumentStatus } from '../core/status.js';
 import { ingestFiles } from '../ingest/ingest.js';
 import { ingestFromMetadata } from '../ingest/metadataIngest.js';
 import { combineExtractedData, convertJsonToCsv } from '../results/processor.js';
+import { confirmOcr, confirmExtraction, retryDoc } from './reviewFlow.js';
+import { showToast, confirmDialog, infoDialog } from './toast.js';
 
 const MOUNT_ID = 'report-list';
 
 const ACCEPTED_EXT = '.pdf,.png,.jpg,.jpeg,.webp,.gif,.bmp,.tif,.tiff';
 
-const STATUS_LABELS = {
-    'queued': { label: 'Queued', cls: 'bg-gray-100 text-gray-700 ring-gray-300' },
-    'ocr-running': { label: 'OCR…', cls: 'bg-blue-50 text-blue-700 ring-blue-300' },
-    'ocr-done': { label: 'OCR done', cls: 'bg-blue-50 text-blue-700 ring-blue-300' },
-    'ocr-confirmed': { label: 'OCR confirmed', cls: 'bg-indigo-50 text-indigo-700 ring-indigo-300' },
-    'extraction-running': { label: 'Extracting…', cls: 'bg-amber-50 text-amber-700 ring-amber-300' },
-    'extraction-done': { label: 'Extracted', cls: 'bg-amber-50 text-amber-700 ring-amber-300' },
-    'confirmed': { label: 'Confirmed', cls: 'bg-green-50 text-green-700 ring-green-300' },
-    'exported': { label: 'Exported', cls: 'bg-gray-100 text-gray-500 ring-gray-300' },
-};
+/** Filter chips: id -> { label, statuses (null = all) }. */
+const FILTERS = [
+    { id: 'all',          label: 'All',          statuses: null },
+    { id: 'working',      label: 'Working',      statuses: ['queued', 'ocr-running', 'ocr-confirmed', 'extraction-running'] },
+    { id: 'check-text',   label: 'Check text',   statuses: ['ocr-done'] },
+    { id: 'check-fields', label: 'Check fields', statuses: ['extraction-done'] },
+    { id: 'done',         label: 'Done',         statuses: ['confirmed', 'exported'] },
+    { id: 'failed',       label: 'Failed',       statuses: ['ocr-failed', 'extraction-failed'] },
+];
 
-let selectionRef = null;   // { getSelected(), setSelected(id) }
-let currentDocs = [];      // last-rendered list, in creation order
+let selectionRef = null;   // { getSelected(), setSelected(id), subscribe(fn) }
+let currentDocs = [];      // last-fetched list, in creation order
+let activeFilter = 'all';
+let searchTerm = '';
 
 /**
- * Mount the report list into #report-list.
+ * Mount the report queue into #report-list.
  * @param {object} deps
  * @param {{ getSelected: () => (string|null), setSelected: (id: string|null) => void,
  *          subscribe: (fn: (id: string|null) => void) => (() => void) }} deps.selection
@@ -43,55 +52,59 @@ export async function mountReportList(deps) {
     const mount = document.getElementById(MOUNT_ID);
     if (!mount) return;
 
-    mount.classList.remove('overflow-auto');
-    mount.classList.add('flex', 'flex-col', 'overflow-hidden');
     mount.innerHTML = `
-<div class="shrink-0 flex items-center gap-2 px-3 py-2 border-b border-gray-200 bg-gray-50">
-    <label for="rl-file-input"
-           class="cursor-pointer inline-flex items-center gap-1.5 rounded-md bg-green-800 px-3 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-green-700">
-        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-4 h-4">
-            <path d="M9.25 13.25a.75.75 0 001.5 0V4.636l2.955 3.129a.75.75 0 001.09-1.03l-4.25-4.5a.75.75 0 00-1.09 0l-4.25 4.5a.75.75 0 101.09 1.03L9.25 4.636v8.614z"/>
-            <path d="M3.5 12.75a.75.75 0 00-1.5 0v2.5A2.75 2.75 0 004.75 18h10.5A2.75 2.75 0 0018 15.25v-2.5a.75.75 0 00-1.5 0v2.5c0 .69-.56 1.25-1.25 1.25H4.75c-.69 0-1.25-.56-1.25-1.25v-2.5z"/>
-        </svg>
-        Upload files
-    </label>
-    <input id="rl-file-input" type="file" multiple accept="${ACCEPTED_EXT}" class="sr-only"/>
-    <label for="rl-metadata-input"
-           class="cursor-pointer inline-flex items-center gap-1.5 rounded-md border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 shadow-sm hover:bg-gray-50">
-        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-4 h-4">
-            <path fill-rule="evenodd" d="M2 4.75A2.75 2.75 0 014.75 2h3.5A2.75 2.75 0 0111 4.75v0h4.25A2.75 2.75 0 0118 7.5v7.75A2.75 2.75 0 0115.25 18H4.75A2.75 2.75 0 012 15.25V4.75zM4.75 3.5A1.25 1.25 0 003.5 4.75v10.5c0 .69.56 1.25 1.25 1.25h10.5c.69 0 1.25-.56 1.25-1.25V7.5a1.25 1.25 0 00-1.25-1.25H10.25A1.75 1.75 0 018.5 4.5v-.25A.75.75 0 007.75 3.5H4.75z" clip-rule="evenodd"/>
-        </svg>
-        Load from metadata CSV
-    </label>
-    <input id="rl-metadata-input" type="file" webkitdirectory directory multiple class="sr-only"/>
-    <span id="rl-hint" class="text-xs text-gray-500">
-        upload one report per drop, or pick a folder with metadata.csv to load a batch
-    </span>
-    <div id="rl-progress" class="hidden ml-auto flex items-center gap-2 text-xs text-gray-600">
-        <div class="w-32 h-1.5 bg-gray-200 rounded overflow-hidden">
-            <div id="rl-progress-bar" class="h-full bg-green-600 transition-all" style="width:0%"></div>
-        </div>
-        <span id="rl-progress-label"></span>
-    </div>
-    <div id="rl-export-wrap" class="ml-auto relative">
-        <button id="rl-export" type="button" disabled
-                class="inline-flex items-center gap-1.5 rounded-md border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 shadow-sm hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed">
+<div class="shrink-0 border-b border-gray-200 bg-gray-50 p-2 space-y-2">
+    <div class="flex gap-1.5">
+        <label for="rl-file-input" title="Upload PDFs or images (one report per PDF; loose images group into one report)"
+               class="cursor-pointer flex-1 inline-flex items-center justify-center gap-1.5 rounded-md bg-green-800 px-2 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-green-700">
             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-4 h-4">
-                <path d="M10.75 2.75a.75.75 0 00-1.5 0v8.614l-2.955-3.129a.75.75 0 10-1.09 1.03l4.25 4.5a.75.75 0 001.09 0l4.25-4.5a.75.75 0 00-1.09-1.03L10.75 11.364V2.75z"/>
+                <path d="M9.25 13.25a.75.75 0 001.5 0V4.636l2.955 3.129a.75.75 0 001.09-1.03l-4.25-4.5a.75.75 0 00-1.09 0l-4.25 4.5a.75.75 0 101.09 1.03L9.25 4.636v8.614z"/>
                 <path d="M3.5 12.75a.75.75 0 00-1.5 0v2.5A2.75 2.75 0 004.75 18h10.5A2.75 2.75 0 0018 15.25v-2.5a.75.75 0 00-1.5 0v2.5c0 .69-.56 1.25-1.25 1.25H4.75c-.69 0-1.25-.56-1.25-1.25v-2.5z"/>
             </svg>
-            Export <span id="rl-export-count" class="text-gray-500"></span>
-        </button>
-        <div id="rl-export-menu" class="hidden absolute right-0 mt-1 w-44 rounded-md border border-gray-200 bg-white shadow-lg z-20">
-            <button data-format="csv" class="rl-export-choice block w-full text-left px-3 py-2 text-xs text-gray-700 hover:bg-gray-100">Download CSV</button>
-            <button data-format="json" class="rl-export-choice block w-full text-left px-3 py-2 text-xs text-gray-700 hover:bg-gray-100">Download JSON</button>
+            Add files
+        </label>
+        <input id="rl-file-input" type="file" multiple accept="${ACCEPTED_EXT}" class="sr-only"/>
+        <label for="rl-metadata-input" title="Pick a folder containing metadata.csv to load a whole batch"
+               class="cursor-pointer flex-1 inline-flex items-center justify-center gap-1.5 rounded-md border border-gray-300 bg-white px-2 py-1.5 text-xs font-medium text-gray-700 shadow-sm hover:bg-gray-50">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-4 h-4">
+                <path fill-rule="evenodd" d="M2 4.75A2.75 2.75 0 014.75 2h3.5A2.75 2.75 0 0111 4.75v0h4.25A2.75 2.75 0 0118 7.5v7.75A2.75 2.75 0 0115.25 18H4.75A2.75 2.75 0 012 15.25V4.75zM4.75 3.5A1.25 1.25 0 003.5 4.75v10.5c0 .69.56 1.25 1.25 1.25h10.5c.69 0 1.25-.56 1.25-1.25V7.5a1.25 1.25 0 00-1.25-1.25H10.25A1.75 1.75 0 018.5 4.5v-.25A.75.75 0 007.75 3.5H4.75z" clip-rule="evenodd"/>
+            </svg>
+            CSV batch
+        </label>
+        <input id="rl-metadata-input" type="file" webkitdirectory directory multiple class="sr-only"/>
+        <div id="rl-export-wrap" class="relative flex-1">
+            <button id="rl-export" type="button" disabled title="Download the confirmed extractions"
+                    class="w-full inline-flex items-center justify-center gap-1.5 rounded-md border border-gray-300 bg-white px-2 py-1.5 text-xs font-medium text-gray-700 shadow-sm hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-4 h-4">
+                    <path d="M10.75 2.75a.75.75 0 00-1.5 0v8.614l-2.955-3.129a.75.75 0 10-1.09 1.03l4.25 4.5a.75.75 0 001.09 0l4.25-4.5a.75.75 0 00-1.09-1.03L10.75 11.364V2.75z"/>
+                    <path d="M3.5 12.75a.75.75 0 00-1.5 0v2.5A2.75 2.75 0 004.75 18h10.5A2.75 2.75 0 0018 15.25v-2.5a.75.75 0 00-1.5 0v2.5c0 .69-.56 1.25-1.25 1.25H4.75c-.69 0-1.25-.56-1.25-1.25v-2.5z"/>
+                </svg>
+                Export<span id="rl-export-count" class="text-gray-400"></span>
+            </button>
+            <div id="rl-export-menu" class="hidden absolute right-0 mt-1 w-40 rounded-md border border-gray-200 bg-white shadow-lg z-20">
+                <button data-format="csv" class="rl-export-choice block w-full text-left px-3 py-2 text-xs text-gray-700 hover:bg-gray-100">Download CSV</button>
+                <button data-format="json" class="rl-export-choice block w-full text-left px-3 py-2 text-xs text-gray-700 hover:bg-gray-100">Download JSON</button>
+            </div>
         </div>
     </div>
+    <div id="rl-progress" style="display:none" class="items-center gap-2 text-xs text-gray-600">
+        <div class="flex-1 h-1.5 bg-gray-200 rounded overflow-hidden">
+            <div id="rl-progress-bar" class="h-full bg-green-600 transition-all" style="width:0%"></div>
+        </div>
+        <span id="rl-progress-label" class="truncate max-w-[10rem]"></span>
+    </div>
+    <input id="rl-search" type="search" placeholder="Search reports…"
+           class="w-full rounded-md border border-gray-300 px-2.5 py-1.5 text-xs focus:border-green-600 focus:outline-none focus:ring-1 focus:ring-green-600"/>
+    <div id="rl-filters" class="flex flex-wrap gap-1"></div>
+    <div id="rl-batch"></div>
 </div>
-<div id="rl-scroll" class="flex-1 overflow-auto"></div>
-`;
+<div id="rl-scroll" class="flex-1 overflow-y-auto"></div>
+<div class="shrink-0 border-t border-gray-200 px-3 py-1.5 text-[11px] text-gray-400 flex justify-between">
+    <span><kbd class="font-sans">K</kbd>/<kbd class="font-sans">J</kbd> next / previous</span>
+    <span><kbd class="font-sans">Enter</kbd> confirm</span>
+</div>`;
 
-    // Wire the file input + drop zone.
+    // Wire the file inputs.
     const input = mount.querySelector('#rl-file-input');
     input.addEventListener('change', async () => {
         if (!input.files?.length) return;
@@ -108,8 +121,8 @@ export async function mountReportList(deps) {
         await ingestMetadataAndRefresh(files);
     });
 
-    // Whole pane is drop-target. Prevent default on all four events so the
-    // browser doesn't try to navigate to the file.
+    // Whole sidebar is a drop-target. Prevent default on all four events so
+    // the browser doesn't try to navigate to the file.
     ['dragenter', 'dragover', 'dragleave', 'drop'].forEach((e) => {
         mount.addEventListener(e, (ev) => { ev.preventDefault(); ev.stopPropagation(); });
     });
@@ -124,7 +137,11 @@ export async function mountReportList(deps) {
         if (files.length) await ingestAndRefresh(files);
     });
 
-    // Redraw the table when selection changes elsewhere (e.g., row deleted).
+    // Search + selection redraw the rows.
+    mount.querySelector('#rl-search').addEventListener('input', (e) => {
+        searchTerm = e.target.value.trim().toLowerCase();
+        renderRows();
+    });
     deps.selection.subscribe(() => renderRows());
 
     // Export button + format menu.
@@ -142,15 +159,154 @@ export async function mountReportList(deps) {
         });
     });
 
+    // Auto-advance after a confirm from the work pane / keyboard.
+    onAppEvent((ev) => {
+        if (ev.type === 'advance') selectNextWithStatus(ev.docId, ev.fromStatus);
+    });
+
     await refresh();
 }
 
-/** Re-fetch documents from IDB and redraw the rows. */
+/** Re-fetch documents from IDB and redraw everything. */
 export async function refresh() {
     currentDocs = await allDocuments();
+    renderFilters();
+    renderBatchAction();
     renderRows();
     refreshExportAffordance();
 }
+
+// ---------- selection helpers (used by keyboard shortcuts + auto-advance) ----------
+
+/** The docs matching the active filter chip + search term, in list order. */
+function visibleDocs() {
+    const filter = FILTERS.find((f) => f.id === activeFilter) || FILTERS[0];
+    return currentDocs.filter((d) => {
+        if (filter.statuses && !filter.statuses.includes(d.status)) return false;
+        if (!searchTerm) return true;
+        const m = d.metadata;
+        const hay = `${d.name || ''} ${m?.tcode || ''} ${m?.docid || ''}`.toLowerCase();
+        return hay.includes(searchTerm);
+    });
+}
+
+/** Move the selection by delta within the visible rows (J/K navigation). */
+export function selectRelative(delta) {
+    const docs = visibleDocs();
+    if (!docs.length) return;
+    const cur = selectionRef?.getSelected();
+    const idx = docs.findIndex((d) => d.id === cur);
+    const next = idx === -1
+        ? (delta > 0 ? docs[0] : docs[docs.length - 1])
+        : docs[Math.min(docs.length - 1, Math.max(0, idx + delta))];
+    selectionRef?.setSelected(next.id);
+}
+
+/** After confirming `afterId`, select the next visible doc still in `status`. */
+function selectNextWithStatus(afterId, status) {
+    const docs = visibleDocs().filter((d) => d.status === status || d.id === afterId);
+    const idx = docs.findIndex((d) => d.id === afterId);
+    const candidates = idx === -1 ? docs : [...docs.slice(idx + 1), ...docs.slice(0, idx)];
+    const next = candidates.find((d) => d.status === status && d.id !== afterId);
+    if (next) selectionRef?.setSelected(next.id);
+}
+
+/** The currently selected document record, if any. */
+export function getSelectedDoc() {
+    const id = selectionRef?.getSelected();
+    return currentDocs.find((d) => d.id === id) || null;
+}
+
+// ---------- filters + batch actions ----------
+
+function renderFilters() {
+    const wrap = document.getElementById('rl-filters');
+    if (!wrap) return;
+    wrap.innerHTML = FILTERS.map((f) => {
+        const count = f.statuses
+            ? currentDocs.filter((d) => f.statuses.includes(d.status)).length
+            : currentDocs.length;
+        const active = f.id === activeFilter;
+        const isFailed = f.id === 'failed';
+        if (f.statuses && count === 0 && !active && f.id !== 'all') {
+            return ''; // hide empty stages to keep the chip row quiet
+        }
+        return `<button type="button" data-filter="${f.id}"
+            class="rounded-full px-2 py-0.5 text-[11px] font-medium ring-1 ring-inset transition-colors
+                ${active
+                    ? 'bg-green-800 text-white ring-green-800'
+                    : isFailed && count > 0
+                        ? 'bg-red-50 text-red-700 ring-red-300 hover:bg-red-100'
+                        : 'bg-white text-gray-600 ring-gray-300 hover:bg-gray-100'}">
+            ${f.label}${count ? ` <span class="${active ? 'text-green-200' : 'text-gray-400'}">${count}</span>` : ''}
+        </button>`;
+    }).join('');
+    wrap.querySelectorAll('button[data-filter]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+            activeFilter = btn.dataset.filter;
+            renderFilters();
+            renderBatchAction();
+            renderRows();
+        });
+    });
+}
+
+function renderBatchAction() {
+    const wrap = document.getElementById('rl-batch');
+    if (!wrap) return;
+    const docs = visibleDocs();
+    let html = '';
+    if (activeFilter === 'check-text' && docs.length) {
+        html = batchButtonHtml('confirm-text', `Confirm text for all ${docs.length}`);
+    } else if (activeFilter === 'check-fields' && docs.length) {
+        html = batchButtonHtml('confirm-fields', `Confirm fields for all ${docs.length}`);
+    } else if (activeFilter === 'failed' && docs.length) {
+        html = batchButtonHtml('retry', `Retry all ${docs.length}`);
+    }
+    wrap.innerHTML = html;
+    wrap.querySelector('button[data-batch]')?.addEventListener('click', () => runBatchAction(wrap.querySelector('button[data-batch]').dataset.batch));
+}
+
+function batchButtonHtml(action, label) {
+    return `<button type="button" data-batch="${action}"
+        class="w-full rounded-md border border-green-700 bg-green-50 px-2 py-1.5 text-xs font-medium text-green-800 hover:bg-green-100">
+        ${label}
+    </button>`;
+}
+
+async function runBatchAction(action) {
+    // Re-read from IDB first: statuses may have moved since the last render
+    // (e.g. flagged-mode auto-confirm), and acting on stale rows could rewind
+    // a doc that has already progressed.
+    currentDocs = await allDocuments();
+    const docs = visibleDocs();
+    if (!docs.length) return;
+    if (action === 'confirm-text') {
+        const ok = await confirmDialog({
+            title: 'Confirm OCR text in bulk',
+            bodyHtml: `Approve the OCR text of <strong>${docs.length}</strong> report${docs.length === 1 ? '' : 's'} without individual review? They will be queued for extraction.`,
+            confirmLabel: `Confirm ${docs.length}`,
+        });
+        if (!ok) return;
+        for (const d of docs) if (d.status === 'ocr-done') await confirmOcr(d.id, { advance: false });
+        showToast(`${docs.length} report${docs.length === 1 ? '' : 's'} queued for extraction.`, { tone: 'success' });
+    } else if (action === 'confirm-fields') {
+        const ok = await confirmDialog({
+            title: 'Confirm extracted fields in bulk',
+            bodyHtml: `Mark the extracted fields of <strong>${docs.length}</strong> report${docs.length === 1 ? '' : 's'} as final without individual review?`,
+            confirmLabel: `Confirm ${docs.length}`,
+        });
+        if (!ok) return;
+        for (const d of docs) if (d.status === 'extraction-done') await confirmExtraction(d.id, { advance: false });
+        showToast(`${docs.length} report${docs.length === 1 ? '' : 's'} marked done.`, { tone: 'success' });
+    } else if (action === 'retry') {
+        for (const d of docs) await retryDoc(d);
+        showToast(`Retrying ${docs.length} report${docs.length === 1 ? '' : 's'}.`);
+    }
+    await refresh();
+}
+
+// ---------- export ----------
 
 function refreshExportAffordance() {
     const btn = document.getElementById('rl-export');
@@ -158,7 +314,7 @@ function refreshExportAffordance() {
     if (!btn || !count) return;
     const eligible = currentDocs.filter((d) => d.status === 'confirmed' || d.status === 'exported').length;
     btn.disabled = eligible === 0;
-    count.textContent = eligible > 0 ? `(${eligible})` : '';
+    count.textContent = eligible > 0 ? ` ${eligible}` : '';
 }
 
 async function handleExport(format) {
@@ -174,14 +330,13 @@ async function handleExport(format) {
         triggerDownload(`extractions-${stamp}.json`, 'application/json', json);
     }
     // Mark each exported doc so the badge reflects the terminal state.
-    // Not idempotent: re-exporting 'exported' docs is fine, this is a no-op.
+    // Via setDocumentStatus so the bus announces it (status strip, etc.).
     for (const d of eligible) {
         if (d.status === 'confirmed') {
-            d.status = 'exported';
-            d.exportedAt = Date.now();
-            await putDocument(d);
+            await setDocumentStatus(d.id, 'exported', { exportedAt: Date.now() });
         }
     }
+    showToast(`Exported ${eligible.length} report${eligible.length === 1 ? '' : 's'} as ${format.toUpperCase()}.`, { tone: 'success' });
     await refresh();
 }
 
@@ -198,11 +353,13 @@ function triggerDownload(filename, mime, content) {
     setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+// ---------- ingest ----------
+
 async function ingestMetadataAndRefresh(files) {
     const progress = document.getElementById('rl-progress');
     const bar = document.getElementById('rl-progress-bar');
     const label = document.getElementById('rl-progress-label');
-    progress?.classList.remove('hidden');
+    if (progress) progress.style.display = 'flex';
     try {
         const { docIds, missing, skipped } = await ingestFromMetadata(files, ({ stage, done, total, message }) => {
             const pct = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 100;
@@ -212,16 +369,24 @@ async function ingestMetadataAndRefresh(files) {
         await refresh();
         if (docIds.length && selectionRef) selectionRef.setSelected(docIds[0]);
         if (skipped || (missing && missing.length)) {
-            const details = missing.map((m) => `${m.tcode} · ${m.docid}${m.pages?.length ? ` (pages ${m.pages.join(', ')})` : ''}`).join('\n');
-            alert(`Loaded ${docIds.length} reports.` +
-                (skipped ? ` ${skipped} row${skipped === 1 ? '' : 's'} skipped (no matching files).` : '') +
-                (missing.length ? `\n\nMissing pages:\n${details}` : ''));
+            const items = missing.map((m) =>
+                `<li class="font-mono text-xs">${escapeHtml(m.tcode)} · ${escapeHtml(m.docid)}${m.pages?.length ? ` (pages ${m.pages.join(', ')})` : ''}</li>`
+            ).join('');
+            await infoDialog({
+                title: 'Batch loaded with gaps',
+                bodyHtml: `
+<p>Loaded <strong>${docIds.length}</strong> reports.</p>
+${skipped ? `<p class="mt-1">${skipped} CSV row${skipped === 1 ? '' : 's'} skipped entirely (no matching files).</p>` : ''}
+${items ? `<p class="mt-2 font-medium">Missing pages:</p><ul class="mt-1 space-y-0.5 list-disc pl-4">${items}</ul>` : ''}`,
+            });
+        } else if (docIds.length) {
+            showToast(`Loaded ${docIds.length} report${docIds.length === 1 ? '' : 's'} from metadata.csv.`, { tone: 'success' });
         }
     } catch (err) {
         console.error('[metadata-ingest] failed', err);
-        alert(`Metadata ingest failed: ${err?.message || err}`);
+        showToast(`Batch load failed: ${err?.message || err}`, { tone: 'error', duration: 8000 });
     } finally {
-        setTimeout(() => progress?.classList.add('hidden'), 300);
+        setTimeout(() => { if (progress) progress.style.display = 'none'; }, 300);
     }
 }
 
@@ -229,7 +394,7 @@ async function ingestAndRefresh(files) {
     const progress = document.getElementById('rl-progress');
     const bar = document.getElementById('rl-progress-bar');
     const label = document.getElementById('rl-progress-label');
-    progress?.classList.remove('hidden');
+    if (progress) progress.style.display = 'flex';
 
     try {
         const docIds = await ingestFiles(files, ({ stage, done, total, message }) => {
@@ -238,15 +403,17 @@ async function ingestAndRefresh(files) {
             if (label) label.textContent = message ? `${stage}: ${message}` : stage;
         });
         await refresh();
-        // Auto-select the first-ingested document so the left pane shows its pages.
+        // Auto-select the first-ingested document so the viewer shows its pages.
         if (docIds.length && selectionRef) selectionRef.setSelected(docIds[0]);
     } catch (err) {
         console.error('[ingest] failed', err);
-        alert(`Upload failed: ${err?.message || err}`);
+        showToast(`Upload failed: ${err?.message || err}`, { tone: 'error', duration: 8000 });
     } finally {
-        setTimeout(() => progress?.classList.add('hidden'), 300);
+        setTimeout(() => { if (progress) progress.style.display = 'none'; }, 300);
     }
 }
+
+// ---------- rows ----------
 
 function renderRows() {
     const scroll = document.getElementById('rl-scroll');
@@ -254,87 +421,101 @@ function renderRows() {
 
     if (!currentDocs.length) {
         scroll.innerHTML = `
-<div class="w-full h-full flex items-center justify-center text-gray-400">
+<div class="h-full flex items-center justify-center text-gray-400">
     <div class="text-center px-4">
-        <p class="text-sm">Upload a PDF or a set of images to get started.</p>
-        <p class="text-xs mt-1">Every upload becomes one report; PDFs stay together, loose images group.</p>
+        <p class="text-sm">Add report files to get started.</p>
+        <p class="text-xs mt-1">Drop PDFs or images here, or load a folder with metadata.csv.</p>
     </div>
 </div>`;
         return;
     }
 
+    const docs = visibleDocs();
+    if (!docs.length) {
+        scroll.innerHTML = `
+<div class="py-10 text-center text-xs text-gray-400">No reports match this filter.</div>`;
+        return;
+    }
+
     const selected = selectionRef?.getSelected();
-    scroll.innerHTML = `
-<table class="min-w-full text-sm">
-    <thead class="sticky top-0 bg-gray-50 text-xs text-gray-600 uppercase">
-        <tr>
-            <th class="px-3 py-2 text-left font-medium">Report</th>
-            <th class="px-3 py-2 text-left font-medium">Pages</th>
-            <th class="px-3 py-2 text-left font-medium">Status</th>
-            <th class="px-3 py-2 text-left font-medium">Added</th>
-            <th class="px-3 py-2 text-right font-medium"></th>
-        </tr>
-    </thead>
-    <tbody class="divide-y divide-gray-100">
-        ${currentDocs.map((d) => rowHtml(d, d.id === selected)).join('')}
-    </tbody>
-</table>`;
+    scroll.innerHTML = docs.map((d) => rowHtml(d, d.id === selected)).join('');
 
     // Row click -> select.
-    scroll.querySelectorAll('tr[data-doc-id]').forEach((tr) => {
-        tr.addEventListener('click', (ev) => {
+    scroll.querySelectorAll('[data-doc-id]').forEach((row) => {
+        row.addEventListener('click', (ev) => {
             if (ev.target.closest('button')) return; // don't select when clicking Delete
-            const id = tr.dataset.docId;
-            selectionRef?.setSelected(id);
+            selectionRef?.setSelected(row.dataset.docId);
         });
     });
 
-    // Delete button.
+    // Delete buttons.
     scroll.querySelectorAll('button[data-delete-id]').forEach((btn) => {
         btn.addEventListener('click', async (ev) => {
             ev.stopPropagation();
             const id = btn.dataset.deleteId;
-            if (!confirm('Delete this report?')) return;
+            const doc = currentDocs.find((d) => d.id === id);
+            const ok = await confirmDialog({
+                title: 'Delete report',
+                bodyHtml: `Delete <strong>${escapeHtml(doc?.metadata?.tcode || doc?.name || 'this report')}</strong> and its OCR text and extracted fields? This cannot be undone.`,
+                confirmLabel: 'Delete',
+                danger: true,
+            });
+            if (!ok) return;
             await deleteDocument(id);
+            // Announce so the status strip (and anyone else) recounts.
+            emitAppEvent({ source: 'ui', type: 'doc-deleted', docId: id });
             if (selectionRef?.getSelected() === id) selectionRef.setSelected(null);
             await refresh();
         });
     });
+
+    // Keep the selected row in view when selection moved via keyboard/advance.
+    scroll.querySelector('[aria-current="true"]')?.scrollIntoView({ block: 'nearest' });
 }
 
 function rowHtml(doc, isSelected) {
-    const status = STATUS_LABELS[doc.status] || STATUS_LABELS.queued;
-    const added = new Date(doc.createdAt).toLocaleString();
-    const rowCls = isSelected
-        ? 'cursor-pointer bg-green-50 hover:bg-green-50'
-        : 'cursor-pointer hover:bg-gray-50';
-    // Metadata-ingested docs get a two-line label: TCode + "CB_DOCID · yearmonth".
-    // Manually-uploaded docs still show their filename.
+    const status = STATUS_META[doc.status] || STATUS_META.queued;
     const m = doc.metadata;
-    const nameCell = m
-        ? `<td class="px-3 py-2 max-w-[24rem]">
-                <div class="text-gray-900 font-medium">${escapeHtml(m.tcode || doc.name)}</div>
-                <div class="text-xs text-gray-500">${escapeHtml(m.docid || '')}${m.yearmonthLabel ? ` · ${escapeHtml(m.yearmonthLabel)}` : ''}</div>
-            </td>`
-        : `<td class="px-3 py-2 text-gray-900 truncate max-w-[24rem]" title="${escapeHtml(doc.name)}">${escapeHtml(doc.name)}</td>`;
+    const title = m?.tcode || doc.name || 'Untitled report';
+    const subtitleParts = [];
+    if (m?.docid) subtitleParts.push(m.docid);
+    if (m?.yearmonthLabel) subtitleParts.push(m.yearmonthLabel);
+    const pageCount = doc.pages?.length ?? 0;
+    const lowConf = doc.status === 'ocr-done' && doc.lowConfLines > 0
+        ? `<span class="inline-flex items-center rounded bg-yellow-50 text-yellow-800 ring-1 ring-inset ring-yellow-300 px-1 py-px text-[10px]"
+                 title="Lines the OCR engine was unsure about">${doc.lowConfLines} unsure</span>`
+        : '';
+
     return `
-<tr data-doc-id="${doc.id}" class="${rowCls}">
-    ${nameCell}
-    <td class="px-3 py-2 text-gray-600">${doc.pages?.length ?? 0}</td>
-    <td class="px-3 py-2">
-        <span class="inline-flex items-center rounded-md px-2 py-0.5 text-xs ring-1 ring-inset ${status.cls}">${status.label}</span>
-    </td>
-    <td class="px-3 py-2 text-gray-500 text-xs whitespace-nowrap">${added}</td>
-    <td class="px-3 py-2 text-right">
-        <button type="button" data-delete-id="${doc.id}"
-                class="text-xs text-red-600 hover:text-red-800 hover:underline"
-                title="Delete report">Delete</button>
-    </td>
-</tr>`;
+<div data-doc-id="${doc.id}" ${isSelected ? 'aria-current="true"' : ''}
+     class="group cursor-pointer border-b border-gray-100 px-3 py-2 ${isSelected ? 'bg-green-50 border-l-2 border-l-green-700' : 'border-l-2 border-l-transparent hover:bg-gray-50'}">
+    <div class="flex items-center justify-between gap-2">
+        <span class="text-sm font-medium text-gray-900 truncate" title="${escapeAttr(doc.name || '')}">${escapeHtml(title)}</span>
+        <span class="shrink-0 inline-flex items-center gap-1.5 text-[11px] ${status.text}">
+            <span class="w-1.5 h-1.5 rounded-full ${status.dot}"></span>${status.label}
+        </span>
+    </div>
+    <div class="mt-0.5 flex items-center justify-between gap-2 text-xs text-gray-500">
+        <span class="truncate">${escapeHtml(subtitleParts.join(' · '))}</span>
+        <span class="shrink-0 flex items-center gap-1.5">
+            ${lowConf}
+            <span>${pageCount}p</span>
+            <button type="button" data-delete-id="${doc.id}" title="Delete report" aria-label="Delete report"
+                    class="opacity-0 group-hover:opacity-100 focus:opacity-100 text-gray-400 hover:text-red-600 transition-opacity">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-3.5 h-3.5">
+                    <path fill-rule="evenodd" d="M8.75 1A2.75 2.75 0 006 3.75v.443c-.795.077-1.584.176-2.365.298a.75.75 0 10.23 1.482l.149-.022.841 10.518A2.75 2.75 0 007.596 19h4.807a2.75 2.75 0 002.742-2.53l.841-10.52.149.023a.75.75 0 00.23-1.482A41.03 41.03 0 0014 4.193V3.75A2.75 2.75 0 0011.25 1h-2.5zM10 4c.84 0 1.673.025 2.5.075V3.75c0-.69-.56-1.25-1.25-1.25h-2.5c-.69 0-1.25.56-1.25 1.25v.325C8.327 4.025 9.16 4 10 4zM8.58 7.72a.75.75 0 00-1.5.06l.3 7.5a.75.75 0 101.5-.06l-.3-7.5zm4.34.06a.75.75 0 10-1.5-.06l-.3 7.5a.75.75 0 101.5.06l.3-7.5z" clip-rule="evenodd"/>
+                </svg>
+            </button>
+        </span>
+    </div>
+</div>`;
 }
 
 function escapeHtml(s) {
     return String(s).replace(/[&<>"']/g, (c) => ({
         '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
     }[c]));
+}
+function escapeAttr(s) {
+    return escapeHtml(s);
 }

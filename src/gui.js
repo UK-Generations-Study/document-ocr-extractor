@@ -1,18 +1,18 @@
 /**
- * Application shell. Renders a persistent header (title + gear), a main flex
- * column split into two vertical zones (top: left/right panes; bottom: report
- * list), and empty mount points for the wizard overlay and settings modal.
- * The panels themselves are populated by later phases:
- *   left  (#report-viewer)      -> Phase 3 (uploaded pages)
- *   right (#work-surface)       -> Phase 4 (OCR text) / Phase 5 (edit form)
- *   bottom (#report-list)       -> Phase 3 (report rows + status)
+ * Application shell. Renders a persistent header (title + pipeline status
+ * strip + gear), and a main three-column workspace:
+ *   left   (#report-list)   -> report queue sidebar (rows, filters, actions)
+ *   center (#report-viewer) -> the selected report's page images
+ *   right  (#work-surface)  -> OCR review / extraction form for that report
+ * plus empty mount points for the wizard overlay and settings modal.
  */
-const marieLogoUrl = 'https://raw.githubusercontent.com/jeyabbalas/medical-report-information-extractor/refs/heads/main/assets/marie_logo.svg';
-const githubLogoUrl = 'https://raw.githubusercontent.com/jeyabbalas/medical-report-information-extractor/refs/heads/main/assets/github.svg';
+import marieLogoUrl from '../assets/marie_logo.svg';
+import githubLogoUrl from '../assets/github.svg';
+
 const sourceCodeUrl = 'https://github.com/jeyabbalas/medical-report-information-extractor';
 
 const emptyPanelSvg = `
-<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1" class="w-10 h-10 mb-2 opacity-40">
+<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1" class="w-10 h-10 mb-2 opacity-40 mx-auto">
   <path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
 </svg>`;
 
@@ -22,11 +22,13 @@ function ui(divID) {
     divUI.innerHTML = `
 <div class="flex flex-col h-screen bg-gray-50">
     <!-- Header -->
-    <header class="flex items-center justify-between px-4 py-2 bg-green-900 text-white shadow-sm shrink-0">
+    <header class="flex items-center justify-between gap-4 px-4 py-2 bg-green-900 text-white shadow-sm shrink-0">
         <div class="flex items-center gap-3 min-w-0">
             <img src="${marieLogoUrl}" class="h-9 w-9 shrink-0" alt="" />
             <h1 class="text-lg font-semibold truncate">Medical Report Information Extractor</h1>
         </div>
+        <!-- Pipeline status strip (populated by src/ui/statusStrip.js) -->
+        <div id="status-strip" class="hidden md:flex items-center gap-2 min-w-0 text-xs"></div>
         <div class="flex items-center gap-2 shrink-0">
             <button id="open-settings" type="button"
                     class="p-2 rounded-md hover:bg-green-800 focus:outline-none focus:ring-2 focus:ring-green-300"
@@ -43,39 +45,29 @@ function ui(divID) {
         </div>
     </header>
 
-    <!-- Main workspace: two vertical zones -->
-    <main class="flex-1 flex flex-col min-h-0">
-        <!-- Top zone: split left / right -->
-        <div class="flex-1 flex min-h-0 divide-x divide-gray-300">
-            <!-- Left pane: report viewer (populated by Phase 3) -->
-            <section id="report-viewer" class="w-1/2 bg-white overflow-auto p-4 flex items-center justify-center text-gray-400">
-                <div class="text-center">
-                    ${emptyPanelSvg}
-                    <p class="text-sm">Report pages will appear here once uploaded.</p>
-                </div>
-            </section>
+    <!-- Main workspace: sidebar + two panes -->
+    <main class="flex-1 flex min-h-0">
+        <!-- Left: report queue sidebar (populated by src/ui/reportList.js) -->
+        <aside id="report-list" class="w-80 shrink-0 border-r border-gray-300 bg-white flex flex-col min-h-0"></aside>
 
-            <!-- Right pane: OCR text / extraction form (populated by Phases 4 & 5) -->
-            <section id="work-surface" class="w-1/2 bg-white overflow-auto p-4 flex items-center justify-center text-gray-400">
-                <div class="text-center">
-                    ${emptyPanelSvg}
-                    <p class="text-sm">OCR text and extracted fields will appear here.</p>
-                </div>
-            </section>
-        </div>
+        <!-- Center: report page images -->
+        <section id="report-viewer" class="flex-1 min-w-0 bg-white border-r border-gray-300 overflow-auto p-4 flex items-center justify-center text-gray-400">
+            <div class="text-center">
+                ${emptyPanelSvg}
+                <p class="text-sm">Report pages will appear here.</p>
+            </div>
+        </section>
 
-        <!-- Bottom zone: report list (populated by Phase 3) -->
-        <section id="report-list" class="h-64 border-t-2 border-gray-300 bg-white overflow-auto shrink-0">
-            <div class="w-full h-full flex items-center justify-center text-gray-400">
-                <div class="text-center">
-                    ${emptyPanelSvg}
-                    <p class="text-sm">Queued and processed reports will appear here.</p>
-                </div>
+        <!-- Right: OCR text / extraction form -->
+        <section id="work-surface" class="flex-1 min-w-0 bg-white overflow-auto p-4 flex items-center justify-center text-gray-400">
+            <div class="text-center">
+                ${emptyPanelSvg}
+                <p class="text-sm">OCR text and extracted fields will appear here.</p>
             </div>
         </section>
     </main>
 
-    <!-- Mount points: filled in on demand by wizard.js / settings modals -->
+    <!-- Mount points: filled in on demand by wizard.js / settingsPanel.js -->
     <div id="wizard-mount"></div>
     <div id="settings-mount"></div>
 </div>

@@ -17,3 +17,10 @@
 .ov-rendered th, .ov-rendered td { border: 1px solid #e5e7eb; padding: 0.25rem 0.5rem; }
 .ov-rendered th { background: #f9fafb; font-weight: 600; }
 .ov-rendered hr { border: 0; border-top: 1px solid #e5e7eb; margin: 1rem 0; }
+
+/* In-text attention marks (src/ui/ocrView.js highlightRegions): match the
+   page-image overlay colors - amber = low confidence, sky = text outside the
+   recognized layout, red = OCR/Deep-OCR disagreement. */
+mark.ov-attention { background: rgb(253 230 138 / 0.75); box-shadow: 0 0 0 1px rgb(245 158 11 / 0.55); border-radius: 2px; color: inherit; }
+mark.ov-attention--gap { background: rgb(186 230 253 / 0.75); box-shadow: 0 0 0 1px rgb(14 165 233 / 0.55); }
+mark.ov-attention--disagree { background: rgb(254 202 202 / 0.8); box-shadow: 0 0 0 1px rgb(239 68 68 / 0.6); }

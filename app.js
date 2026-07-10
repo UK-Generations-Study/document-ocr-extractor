@@ -1,15 +1,19 @@
 /**
- * Medical Report Information Extractor - orchestrator (Phase 2 shape).
+ * Medical Report Information Extractor - orchestrator.
  *
- * Renders the three-panel shell (src/gui.js), decides on load whether to
- * open the setup wizard (missing schema / creds / model) or leave the shell
- * visible, and wires the gear icon to reopen the wizard. The wizard itself
- * (src/ui/wizard.js) is UI-only; every side effect (fetching a schema,
- * validating an API key, saving to IndexedDB) is a dep injected from here.
+ * Renders the shell (src/gui.js: sidebar + viewer + work surface), owns the
+ * selected-report singleton, and wires the app event bus:
+ *   - status routing: 'queued' -> OCR queue, 'ocr-confirmed' -> extraction
+ *     queue (no polling; the queues are purely event-driven after the one
+ *     boot-time prime pass);
+ *   - work-pane routing: OCR view vs extraction view per selected doc status;
+ *   - keyboard review shortcuts (J/K navigate, Enter confirm-and-advance).
  *
- * The OCR pipeline (src/ocr/) is ported but not yet invoked - Phase 3 wires
- * ingest + the left/right/bottom panes, Phase 4 the OCR review, Phase 5 the
- * extraction call and edit form. This file will grow again as those land.
+ * First run opens the setup wizard (missing schema / creds / model); the gear
+ * icon opens the settings panel, which links back into individual wizard
+ * steps. The wizard itself (src/ui/wizard.js) is UI-only; every side effect
+ * (fetching a schema, validating an API key, saving to IndexedDB) is a dep
+ * injected from here.
  */
 import './src/styles.css';
 
@@ -21,15 +25,27 @@ import {
     getConfigRecord,
     deleteConfigRecord,
 } from './src/db.js';
+import { onAppEvent } from './src/core/bus.js';
+import { OCR_PANE_STATUSES, EXTRACTION_PANE_STATUSES } from './src/core/status.js';
 import { openWizard } from './src/ui/wizard.js';
-import { mountReportList, refresh as refreshReportList } from './src/ui/reportList.js';
+import { openSettingsPanel } from './src/ui/settingsPanel.js';
+import {
+    mountReportList,
+    refresh as refreshReportList,
+    selectRelative,
+    getSelectedDoc,
+} from './src/ui/reportList.js';
 import { mountReportViewer } from './src/ui/reportViewer.js';
 import { initOcrView, releaseOcrPane, showOcrFor } from './src/ui/ocrView.js';
 import { initExtractionView, releaseExtractionPane, showExtractionFor } from './src/ui/extractionView.js';
 import { initTooltip } from './src/ui/tooltip.js';
+import { initStatusStrip } from './src/ui/statusStrip.js';
+import { initSyncScroll } from './src/ui/syncScroll.js';
+import { confirmOcr, confirmExtraction } from './src/ui/reviewFlow.js';
+import { isModalOpen } from './src/ui/toast.js';
 import { getDocument } from './src/db.js';
-import { enqueueDocument, primeQueueFromDb, recoverStuckDocuments, subscribeQueue } from './src/ocr/queue.js';
-import { enqueueExtraction, primeExtractionFromDb, recoverStuckExtraction, subscribeExtract } from './src/extract/extract.js';
+import { enqueueDocument, primeQueueFromDb, recoverStuckDocuments } from './src/ocr/queue.js';
+import { enqueueExtraction, primeExtractionFromDb } from './src/extract/extract.js';
 
 import { API_PROVIDERS, DEFAULT_OPENAI_BASE_URL } from './src/core/constants.js';
 
@@ -324,22 +340,30 @@ const selection = {
 // SHELL + INIT
 // =============================================================================
 
+function openWizardAt(startStep) {
+    openWizard({
+        loadConfig: fetchAndValidateConfig,
+        readSetupStatus,
+        validateAndSaveCreds,
+        saveModel,
+        startStep,
+        onComplete: () => {/* shell already visible; nothing to reveal */},
+    });
+}
+
 function bindGearIcon() {
     const btn = document.getElementById('open-settings');
     if (!btn) return;
     btn.addEventListener('click', () => {
-        openWizard({
-            loadConfig: fetchAndValidateConfig,
-            readSetupStatus,
-            validateAndSaveCreds,
-            saveModel,
-            onComplete: () => {/* settings-mode: nothing to reveal, shell already visible */},
-        });
+        openSettingsPanel({ readSetupStatus, openWizardAt });
     });
 }
 
-const OCR_STATUSES = new Set(['queued', 'ocr-running', 'ocr-done']);
-const EXTRACTION_STATUSES = new Set(['ocr-confirmed', 'extraction-running', 'extraction-done', 'confirmed', 'exported']);
+// Per-doc work-pane override: 'ocr' shows the (read-only) OCR text view even
+// while the doc's status belongs to the extraction pane ("View text" /
+// "View extracted fields" buttons). Cleared on any status change, where the
+// status-based routing takes over again.
+const paneOverrides = new Map();
 
 async function routeWorkPane(docId) {
     if (!docId) {
@@ -350,7 +374,7 @@ async function routeWorkPane(docId) {
     }
     const doc = await getDocument(docId);
     if (!doc) return;
-    if (EXTRACTION_STATUSES.has(doc.status)) {
+    if (EXTRACTION_PANE_STATUSES.has(doc.status) && paneOverrides.get(docId) !== 'ocr') {
         releaseOcrPane();
         await showExtractionFor(docId);
     } else {
@@ -359,37 +383,94 @@ async function routeWorkPane(docId) {
     }
 }
 
+// Coalesce bursts of queue events into one sidebar redraw per animation-ish tick.
+let refreshTimer = null;
+function scheduleListRefresh() {
+    if (refreshTimer) return;
+    refreshTimer = setTimeout(() => {
+        refreshTimer = null;
+        void refreshReportList();
+    }, 150);
+}
+
+function wireBus() {
+    onAppEvent(async (ev) => {
+        // Queue routing: every status transition lands here exactly once
+        // (all writers go through setDocumentStatus / the queues).
+        if (ev.type === 'status') {
+            paneOverrides.delete(ev.docId); // status flow resumes pane control
+            if (ev.status === 'queued') enqueueDocument(ev.docId);
+            else if (ev.status === 'ocr-confirmed') enqueueExtraction(ev.docId);
+        }
+
+        // "View text" / "View extracted fields" pane toggle.
+        if (ev.type === 'set-pane') {
+            if (ev.pane === 'ocr') paneOverrides.set(ev.docId, 'ocr');
+            else paneOverrides.delete(ev.docId);
+            if (selection.getSelected() === ev.docId) await routeWorkPane(ev.docId);
+            return;
+        }
+
+        // Sidebar + work-pane refresh.
+        const refreshTypes = ev.type === 'status' || ev.type === 'doc-done' || ev.type === 'doc-start'
+            || ev.type === 'schema-done' || ev.type === 'enqueued';
+        if (refreshTypes) {
+            scheduleListRefresh();
+            const sel = selection.getSelected();
+            if (ev.type === 'status' && sel && sel === ev.docId) await routeWorkPane(sel);
+        }
+    });
+}
+
+/**
+ * Review keyboard shortcuts: K selects the next visible sidebar row, J the
+ * previous; Enter confirms the selected doc's current review stage and
+ * advances. Inactive while typing in a field or while a modal/wizard is open.
+ */
+function bindKeyboard() {
+    const isTyping = () => {
+        const ae = document.activeElement;
+        return !!(ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.tagName === 'SELECT' || ae.isContentEditable));
+    };
+    document.addEventListener('keydown', async (e) => {
+        if (e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey) return;
+        if (isTyping() || isModalOpen()) return;
+        if (e.key === 'k' || e.key === 'K') {
+            e.preventDefault();
+            selectRelative(1);
+        } else if (e.key === 'j' || e.key === 'J') {
+            e.preventDefault();
+            selectRelative(-1);
+        } else if (e.key === 'Enter') {
+            const doc = getSelectedDoc();
+            if (!doc) return;
+            if (doc.status === 'ocr-done') {
+                e.preventDefault();
+                await confirmOcr(doc.id);
+            } else if (doc.status === 'extraction-done') {
+                e.preventDefault();
+                await confirmExtraction(doc.id);
+            }
+        }
+    });
+}
+
 async function mountWorkspace() {
     await mountReportList({ selection });
     mountReportViewer({ selection });
     initOcrView();
     initExtractionView();
+    initStatusStrip();
+    await initSyncScroll();
 
     // Router: pick the right work-pane view whenever the selected doc changes.
     selection.subscribe((id) => { void routeWorkPane(id); });
-    // Also re-route whenever a status transition might flip the ownership
-    // (OCR queue confirm -> extraction; extraction confirm -> stays; etc).
-    subscribeQueue(async (ev) => {
-        if (ev.type === 'status' || ev.type === 'doc-done' || ev.type === 'doc-start') {
-            refreshReportList();
-            const sel = selection.getSelected();
-            if (sel === ev.docId) await routeWorkPane(sel);
-        }
-    });
-    subscribeExtract(async (ev) => {
-        if (ev.type === 'status' || ev.type === 'doc-done' || ev.type === 'doc-start' || ev.type === 'schema-done') {
-            refreshReportList();
-            const sel = selection.getSelected();
-            if (sel === ev.docId) await routeWorkPane(sel);
-        }
-    });
+    wireBus();
+    bindKeyboard();
 
-    setInterval(async () => {
-        await primeQueueFromDb();
-        await primeExtractionFromDb();
-    }, 2000);
+    // One boot-time pass: recover *-running docs stranded by a closed session,
+    // then enqueue whatever is actionable. After this, routing is event-driven.
     await recoverStuckDocuments();
-    await recoverStuckExtraction();
     await primeQueueFromDb();
     await primeExtractionFromDb();
 

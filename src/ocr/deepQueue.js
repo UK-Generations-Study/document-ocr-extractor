@@ -15,25 +15,18 @@
  * re-run Quick Read via the queue's re-run path (Phase 5).
  */
 import { DeepClient, DeepCancelled } from './workers/deep-client.ts';
-import { getBlob, getDocument, putDocument, putOcrPage } from '../db.js';
+import { emitAppEvent } from '../core/bus.js';
+import { getBlob, getDocument, putOcrPage } from '../db.js';
 
 let client = null;
 let loading = null;   // Promise resolving to the loaded client
-const listeners = new Set();
 const pending = [];   // queue of doc ids to process
 let processing = false;
 let idleTimer = null;
 const IDLE_TEARDOWN_MS = 60_000; // release the ~1.4 GB after 60 s idle
 
 function emit(event) {
-    for (const fn of listeners) {
-        try { fn(event); } catch (err) { console.error('[deep-queue] listener error', err); }
-    }
-}
-
-export function subscribeDeepQueue(fn) {
-    listeners.add(fn);
-    return () => listeners.delete(fn);
+    emitAppEvent({ source: 'deep', ...event });
 }
 
 async function ensureClient() {

@@ -49,6 +49,9 @@ let deps = null;              // injected from app.js
  *   Validate credentials, save them, and return the model list.
  * @param {(modelName: string) => Promise<void>} injected.saveModel
  * @param {() => void} injected.onComplete  Called on Finish.
+ * @param {number} [injected.startStep]  Open at a specific step (1..3); used
+ *   by the settings panel's "Change…" buttons. Without it the wizard starts
+ *   at the first incomplete step.
  */
 export async function openWizard(injected) {
     deps = injected;
@@ -57,7 +60,8 @@ export async function openWizard(injected) {
 
     // Decide starting step from what's already saved: skip completed slots.
     const status = await deps.readSetupStatus();
-    if (!status.schemaOk) currentStep = 1;
+    if (injected.startStep >= 1 && injected.startStep <= 3) currentStep = injected.startStep;
+    else if (!status.schemaOk) currentStep = 1;
     else if (!status.credsOk) currentStep = 2;
     else if (!status.modelOk) currentStep = 3;
     else currentStep = 1;
@@ -95,8 +99,8 @@ function wizardOverlayHtml() {
                 <h1 class="text-xl font-semibold text-gray-900">Setup</h1>
                 <p id="wizard-step-label" class="text-xs text-gray-500 mt-0.5"></p>
             </div>
-            <button id="wizard-close" type="button"
-                    class="text-sm text-gray-500 hover:text-gray-800 hidden inline-flex items-center gap-1"
+            <button id="wizard-close" type="button" style="display:none"
+                    class="text-sm text-gray-500 hover:text-gray-800 items-center gap-1"
                     title="Close" aria-label="Close">
                 <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-4 h-4">
                     <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
@@ -125,7 +129,7 @@ async function renderStep(n) {
     const complete = status.schemaOk && status.credsOk && status.modelOk;
     const closeBtn = document.getElementById('wizard-close');
     if (closeBtn) {
-        closeBtn.classList.toggle('hidden', !complete);
+        closeBtn.style.display = complete ? 'inline-flex' : 'none';
         closeBtn.onclick = () => closeWizard();
     }
 

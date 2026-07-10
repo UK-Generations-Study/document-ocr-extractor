@@ -1,27 +1,36 @@
 /**
- * Right-pane OCR review view (Phase 4a).
+ * Right-pane OCR review view.
  *
  * Renders one section per page of the currently-selected document. Waits
  * quietly while OCR is queued or running (a summary banner tracks the queue
  * events), then shows the extracted text as a set of per-page editable
- * textareas. A "Confirm OCR" button at the top transitions the document
- * status to 'ocr-confirmed' and disables editing.
+ * cards (rendered markdown or raw). "Confirm text" approves the document for
+ * extraction; a failed OCR run surfaces the error with a Retry button.
  *
- * The confidence highlight in Phase 4a is deliberately conservative: we surface
- * a per-page "low-confidence tokens" count derived from the uncertainty layer,
- * not a character-level bg-yellow overlay. The private-eye codebase has
- * character-precise highlights; wiring them cleanly is a Phase 4b task after
- * Deep Read lands - they share the same uncertainty layer.
+ * Edit safety: queue events request a re-render, but while the abstractor is
+ * typing in any editor inside this pane the re-render is deferred until
+ * focus leaves the pane - a mid-edit DOM rebuild used to throw away their
+ * in-progress correction (edits only persist on blur).
+ *
+ * Page cards carry data-page-index so syncScroll.js can align them with the
+ * viewer's page images.
+ *
+ * Layout contract with reportViewer.js: sticky pane header min-h-16, page
+ * card headers h-8, card bodies sized to the page's aspect ratio (scrolling
+ * internally when the text is longer) - so page N here and page N in the
+ * viewer line up exactly. Keep the two in sync if you change one.
  */
 import { micromark } from 'micromark';
 import { gfm, gfmHtml } from 'micromark-extension-gfm';
 import TurndownService from 'turndown';
-import { getDocument, getOcrPagesByDoc, putDocument, putOcrPage } from '../db.js';
-import { enqueueDocument, subscribeQueue } from '../ocr/queue.js';
-import { cancelCurrentDeep, enqueueDeep, subscribeDeepQueue } from '../ocr/deepQueue.js';
+import { getDocument, getOcrPagesByDoc, putOcrPage } from '../db.js';
+import { onAppEvent, emitAppEvent } from '../core/bus.js';
+import { setDocumentStatus } from '../core/status.js';
+import { attentionRegions } from '../ocr/confidence.js';
+import { confirmOcr } from './reviewFlow.js';
+import { cancelCurrentDeep, enqueueDeep } from '../ocr/deepQueue.js';
 
 const MOUNT_ID = 'work-surface';
-const LOW_CONF_THRESHOLD = 0.6;
 
 const turndown = new TurndownService({
     headingStyle: 'atx',
@@ -31,30 +40,34 @@ const turndown = new TurndownService({
 });
 
 let currentDocId = null;
-let unsubQueue = null;
-let unsubDeep = null;
 // Per-doc Deep Read UI progress state, keyed by docId. Not persisted - purely
 // a rendering aid so the sticky bar can show weight download / phase.
 const deepState = new Map();
 // Only redraw automatically on queue events when the workPane router hasn't
 // switched us off. app.js sets this on OCR-family statuses.
 let ownsPane = false;
+// A queue event arrived while the user was editing; render when focus leaves.
+let pendingRender = false;
 
 export function initOcrView() {
-    unsubQueue = subscribeQueue((ev) => {
+    onAppEvent((ev) => {
         if (!ownsPane || !currentDocId) return;
-        if (ev.docId && ev.docId !== currentDocId) return;
-        if (ev.type === 'doc-done' || ev.type === 'status' || ev.type === 'doc-start') {
-            renderFor(currentDocId, { force: true });
-        } else if (ev.type === 'page-done' || ev.type === 'page-start' || ev.type === 'load-progress') {
-            renderFor(currentDocId, { force: true });
+        if (ev.source === 'ocr') {
+            if (ev.docId && ev.docId !== currentDocId) return;
+            if (['doc-done', 'status', 'doc-start', 'page-done', 'page-start', 'load-progress'].includes(ev.type)) {
+                requestRender();
+            }
+            return;
         }
-    });
-    unsubDeep = subscribeDeepQueue((ev) => {
-        if (ev.type === 'load-progress') {
-            for (const st of deepState.values()) st.load = { loaded: ev.loaded, total: ev.total };
-        }
-        if (ev.docId) {
+        if (ev.source === 'deep') {
+            if (ev.type === 'load-progress') {
+                // Global (no docId): only relevant if the current doc is waiting on it.
+                for (const st of deepState.values()) st.load = { loaded: ev.loaded, total: ev.total };
+                const cur = deepState.get(currentDocId);
+                if (cur?.starting || cur?.running) requestRender();
+                return;
+            }
+            if (!ev.docId || ev.docId !== currentDocId) return;
             const st = deepState.get(ev.docId) || {};
             if (ev.type === 'doc-start') st.running = true;
             if (ev.type === 'page-start') { st.pageIndex = ev.pageIndex; st.pageCount = ev.pageCount; }
@@ -65,20 +78,53 @@ export function initOcrView() {
                 st.running = false;
             }
             deepState.set(ev.docId, st);
+            requestRender();
         }
-        if (ownsPane && currentDocId) renderFor(currentDocId, { force: true });
     });
+
+    // Deferred renders fire once the user tabs/clicks out of the editor they
+    // were in. The small delay lets the editor's own blur-persist commit to
+    // IndexedDB before we re-read it.
+    document.getElementById(MOUNT_ID)?.addEventListener('focusout', () => {
+        if (!ownsPane || !pendingRender) return;
+        setTimeout(() => {
+            if (!ownsPane || !pendingRender) return;
+            const mount = document.getElementById(MOUNT_ID);
+            if (mount && paneHasFocusedEditor(mount)) return; // moved to another field
+            pendingRender = false;
+            if (currentDocId) renderFor(currentDocId, { force: true });
+        }, 200);
+    });
+}
+
+function paneHasFocusedEditor(mount) {
+    const ae = document.activeElement;
+    return !!(ae && mount.contains(ae) &&
+        (ae.tagName === 'TEXTAREA' || ae.tagName === 'INPUT' || ae.tagName === 'SELECT' || ae.isContentEditable));
+}
+
+/** Re-render for a queue event - unless the user is mid-edit in this pane. */
+function requestRender() {
+    if (!currentDocId) return;
+    const mount = document.getElementById(MOUNT_ID);
+    if (mount && paneHasFocusedEditor(mount)) {
+        pendingRender = true;
+        return;
+    }
+    renderFor(currentDocId, { force: true });
 }
 
 /** Called by the workPane router when the OCR view should be visible. */
 export function showOcrFor(docId) {
     ownsPane = true;
+    pendingRender = false;
     return renderFor(docId, { force: true });
 }
 
 /** Called by the router when the extraction view takes over. */
 export function releaseOcrPane() {
     ownsPane = false;
+    pendingRender = false;
     currentDocId = null;
 }
 
@@ -90,9 +136,10 @@ async function renderFor(docId, { force } = {}) {
 
     if (!docId) { renderEmpty(mount); return; }
 
-    // Loosen the layout defaults from the shell so per-page cards can breathe.
-    mount.classList.remove('items-center', 'justify-center');
-    mount.classList.add('items-stretch');
+    // Back to block layout: as a leftover flex container the max-w-3xl
+    // wrapper would become a flex item and size to its content, breaking the
+    // width (and thus page-height) match with the viewer pane.
+    mount.classList.remove('flex', 'items-center', 'justify-center');
 
     const doc = await getDocument(docId);
     if (!doc || currentDocId !== docId) return;
@@ -103,7 +150,7 @@ async function renderFor(docId, { force } = {}) {
     const ocrByKey = new Map(ocrPages.map((r) => [r.pageBlobKey, r]));
 
     mount.innerHTML = `
-<div class="w-full space-y-4">
+<div class="max-w-3xl mx-auto space-y-4">
     ${headerHtml(doc, ocrByKey)}
     <div id="ov-pages" class="space-y-4"></div>
 </div>`;
@@ -115,27 +162,17 @@ async function renderFor(docId, { force } = {}) {
         pagesRoot.appendChild(pageSectionEl(doc, i, page, ocr));
     }
 
-    // Toolbar buttons.
+    // Toolbar buttons. Status changes go through setDocumentStatus so the
+    // bus routing (queued -> OCR queue, ocr-confirmed -> extraction) fires.
     mount.querySelector('#ov-confirm')?.addEventListener('click', async () => {
-        const d = await getDocument(docId);
-        if (!d) return;
-        d.status = 'ocr-confirmed';
-        await putDocument(d);
-        renderFor(docId, { force: true });
+        await confirmOcr(docId);
     });
     mount.querySelector('#ov-reopen')?.addEventListener('click', async () => {
-        const d = await getDocument(docId);
-        if (!d) return;
-        d.status = 'ocr-done';
-        await putDocument(d);
+        await setDocumentStatus(docId, 'ocr-done');
         renderFor(docId, { force: true });
     });
     mount.querySelector('#ov-retry')?.addEventListener('click', async () => {
-        const d = await getDocument(docId);
-        if (!d) return;
-        d.status = 'queued';
-        await putDocument(d);
-        enqueueDocument(docId);
+        await setDocumentStatus(docId, 'queued', { lastError: null });
         renderFor(docId, { force: true });
     });
     mount.querySelector('#ov-deep')?.addEventListener('click', () => {
@@ -150,6 +187,11 @@ async function renderFor(docId, { force } = {}) {
     mount.querySelector('#ov-deep-cancel')?.addEventListener('click', () => {
         cancelCurrentDeep();
     });
+    // Available when this (read-only) text view was opened over an
+    // extraction-family status: switch the pane back to the fields.
+    mount.querySelector('#ov-view-fields')?.addEventListener('click', () => {
+        emitAppEvent({ source: 'ui', type: 'set-pane', docId, pane: null });
+    });
 }
 
 function headerHtml(doc, ocrByKey) {
@@ -162,17 +204,18 @@ function headerHtml(doc, ocrByKey) {
     let controls = '';
     switch (doc.status) {
         case 'queued':
-            statusLine = `<span class="text-gray-500">Queued for OCR&hellip;</span>`;
+            statusLine = `<span class="text-gray-500">Waiting to be read&hellip;</span>`;
             break;
         case 'ocr-running':
-            statusLine = `<span class="text-blue-700">Reading page ${donePages + 1} of ${pages.length}&hellip;</span>`;
+            statusLine = `<span class="text-blue-700">Reading page ${Math.min(donePages + 1, pages.length)} of ${pages.length}&hellip;</span>`;
             break;
         case 'ocr-done':
-            statusLine = `<span class="text-blue-700">OCR complete &mdash; review and edit below.</span>`;
+            statusLine = `<span class="text-amber-700">Check the text below, then confirm.</span>`;
             controls = `
 <button id="ov-confirm" type="button"
+    title="Approve the text and queue this report for field extraction (Enter)"
     class="rounded-md bg-green-800 px-3 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-green-700">
-    Confirm OCR
+    Confirm text
 </button>
 <button id="ov-retry" type="button"
     class="rounded-md border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50">
@@ -180,14 +223,27 @@ function headerHtml(doc, ocrByKey) {
 </button>
 ${deepButtonHtml(anyDeep, deep)}`;
             break;
+        case 'ocr-failed':
+            statusLine = `<span class="text-red-700" title="${escapeAttr(doc.lastError || '')}">OCR failed${doc.lastError ? `: ${escapeHtml(truncate(doc.lastError, 90))}` : ''}</span>`;
+            controls = `
+<button id="ov-retry" type="button"
+    class="rounded-md bg-green-800 px-3 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-green-700">
+    Retry OCR
+</button>`;
+            break;
         case 'ocr-confirmed':
         case 'extraction-running':
         case 'extraction-done':
         case 'confirmed':
         case 'exported':
-            statusLine = `<span class="text-green-700">OCR confirmed.</span>`;
+            statusLine = `<span class="text-green-700">Text confirmed (read-only).</span>`;
             controls = `
+<button id="ov-view-fields" type="button"
+    class="rounded-md bg-green-800 px-3 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-green-700">
+    View extracted fields
+</button>
 <button id="ov-reopen" type="button"
+    title="Unlock the text for editing; the report will need re-extraction after"
     class="rounded-md border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50">
     Reopen for edit
 </button>`;
@@ -196,17 +252,17 @@ ${deepButtonHtml(anyDeep, deep)}`;
             statusLine = escapeHtml(String(doc.status));
     }
 
+    // Exactly h-16 to match the viewer pane's header, so the first page in
+    // both panes starts at the same offset. The controls row scrolls
+    // horizontally rather than wrapping (wrapping would grow the header and
+    // break the alignment).
     return `
-<div class="sticky top-0 z-10 -mx-4 px-4 py-2 bg-white/90 backdrop-blur border-b border-gray-200 flex flex-col gap-1">
-    <div class="flex items-center justify-between">
-        <div class="text-xs text-gray-500 truncate">
-            ${escapeHtml(doc.name)}
-        </div>
-        <div class="flex items-center gap-2">
-            ${statusLine}
-            ${controls}
-        </div>
+<div class="sticky top-0 z-10 -mx-4 px-4 h-16 bg-white/90 backdrop-blur border-b border-gray-200 flex flex-col justify-center gap-1">
+    <div class="flex items-baseline gap-2 min-w-0 text-xs">
+        <span class="text-gray-500 truncate shrink-0 max-w-[40%]">${escapeHtml(doc.metadata?.tcode || doc.name)}</span>
+        <span class="truncate">${statusLine}</span>
     </div>
+    ${controls ? `<div class="flex items-center gap-2 flex-nowrap overflow-x-auto [&>button]:whitespace-nowrap [&>button]:shrink-0">${controls}</div>` : ''}
     ${deepProgressBarHtml(deep)}
 </div>`;
 }
@@ -256,10 +312,12 @@ function deepProgressBarHtml(st) {
 function pageSectionEl(doc, pageIndex, page, ocr) {
     const wrap = document.createElement('div');
     wrap.className = 'border border-gray-200 rounded shadow-sm bg-white';
+    wrap.dataset.pageIndex = String(pageIndex);
 
-    const lowConf = countLowConfLines(ocr?.uncertainty);
-    const lowConfBadge = lowConf > 0
-        ? `<span class="ml-2 inline-flex items-center rounded bg-yellow-50 text-yellow-800 ring-1 ring-inset ring-yellow-300 px-1.5 py-0.5 text-[10px]">${lowConf} low-conf line${lowConf === 1 ? '' : 's'}</span>`
+    const regions = attentionRegions(ocr?.uncertainty);
+    const lowConfBadge = regions.length > 0
+        ? `<span class="ml-2 inline-flex items-center rounded bg-yellow-50 text-yellow-800 ring-1 ring-inset ring-yellow-300 px-1.5 py-0.5 text-[10px]"
+                 title="Highlighted in the text below and boxed on the page image">${regions.length} to check</span>`
         : '';
     const sourceBadge = ocr?.source === 'deep'
         ? `<span class="ml-2 inline-flex items-center rounded bg-purple-50 text-purple-800 ring-1 ring-inset ring-purple-300 px-1.5 py-0.5 text-[10px]">deep</span>`
@@ -272,31 +330,34 @@ function pageSectionEl(doc, pageIndex, page, ocr) {
     const placeholder = ocr ? '' : 'Waiting for OCR&hellip;';
     const renderedHtml = initial ? micromark(initial, { extensions: [gfm()], htmlExtensions: [gfmHtml()] }) : '';
 
+    // The body shares the page image's aspect ratio so this card's height
+    // matches the viewer's page card exactly; longer text scrolls inside.
     wrap.innerHTML = `
-<div class="flex items-baseline justify-between px-3 py-1.5 border-b border-gray-100 text-xs text-gray-600">
+<div class="h-8 flex items-center justify-between px-3 border-b border-gray-100 text-xs text-gray-600">
     <div>Page ${pageIndex + 1}${sourceBadge}${lowConfBadge}</div>
     <div class="flex items-center gap-2">
         <div class="ov-toggle inline-flex rounded-md ring-1 ring-gray-200 overflow-hidden" role="group">
             <button type="button" data-mode="rendered" class="ov-mode ov-mode-rendered px-2 py-0.5 text-[11px] font-medium text-gray-700 bg-gray-100">Rendered</button>
             <button type="button" data-mode="raw" class="ov-mode ov-mode-raw px-2 py-0.5 text-[11px] font-medium text-gray-500 hover:bg-gray-50">Raw</button>
         </div>
-        <span class="text-gray-400">${page.width} x ${page.height}</span>
     </div>
 </div>
-<div class="ov-rendered prose prose-sm max-w-none p-4 text-sm leading-relaxed min-h-[8rem] focus:outline-none focus:bg-green-50/30"
-     ${readonly ? '' : 'contenteditable="true" spellcheck="false"'}
-     style="--tw-prose-headings: #111827;">${renderedHtml || `<p class="text-gray-400 italic">${placeholder || 'No OCR text yet.'}</p>`}</div>
-<textarea
-    data-page-key="${escapeAttr(page.blobKey)}"
-    class="ov-raw w-full p-3 text-sm font-mono resize-y focus:outline-none focus:ring-0 min-h-[8rem] hidden"
-    rows="10"
-    placeholder="${placeholder}"
-    ${readonly ? 'readonly' : ''}
->${escapeHtml(initial)}</textarea>`;
+<div class="ov-body overflow-y-auto" style="aspect-ratio: ${page.width} / ${page.height};">
+    <div class="ov-rendered prose prose-sm max-w-none p-4 text-sm leading-relaxed focus:outline-none focus:bg-green-50/30"
+         ${readonly ? '' : 'contenteditable="true" spellcheck="false"'}
+         style="--tw-prose-headings: #111827;">${renderedHtml || `<p class="text-gray-400 italic">${placeholder || 'No OCR text yet.'}</p>`}</div>
+    <textarea
+        data-page-key="${escapeAttr(page.blobKey)}"
+        class="ov-raw w-full h-full p-3 text-sm font-mono resize-none focus:outline-none focus:ring-0 hidden"
+        placeholder="${placeholder}"
+        ${readonly ? 'readonly' : ''}
+    >${escapeHtml(initial)}</textarea>
+</div>`;
 
     // Wire mode toggle.
     const rendered = wrap.querySelector('.ov-rendered');
     const rawTa = wrap.querySelector('.ov-raw');
+    highlightRegions(rendered, regions);
     const btnRendered = wrap.querySelector('.ov-mode-rendered');
     const btnRaw = wrap.querySelector('.ov-mode-raw');
     const applyMode = (mode) => {
@@ -360,24 +421,66 @@ function pageSectionEl(doc, pageIndex, page, ocr) {
         rendered.innerHTML = nextText
             ? micromark(nextText, { extensions: [gfm()], htmlExtensions: [gfmHtml()] })
             : `<p class="text-gray-400 italic">No OCR text yet.</p>`;
+        highlightRegions(rendered, regions);
     });
 
     return wrap;
 }
 
-function countLowConfLines(uncertainty) {
-    if (!uncertainty || !Array.isArray(uncertainty.lines)) return 0;
-    let n = 0;
-    for (const line of uncertainty.lines) {
-        const conf = typeof line.avgConf === 'number' ? line.avgConf : line.conf;
-        if (typeof conf === 'number' && conf < LOW_CONF_THRESHOLD) n++;
+// ---------- in-text attention highlighting ----------
+
+/**
+ * Mark each attention region's text inside the rendered-markdown view so the
+ * abstractor sees WHERE to check without cross-referencing the page image.
+ * Matching is text-node based: the OCR line text (or its prefix, when inline
+ * formatting split the line) is located and wrapped in a <mark>. Regions
+ * whose text can't be found (e.g. dropped by layout assembly) simply don't
+ * get an in-text mark - the page-image overlay still shows them.
+ */
+function highlightRegions(rendered, regions) {
+    if (!rendered || !regions?.length) return;
+    for (const r of regions) {
+        const needle = (r.text || '').trim();
+        if (needle.length < 4) continue;
+        if (markMatch(rendered, needle, r)) continue;
+        // Inline formatting may split the line across nodes; try a prefix.
+        const prefix = needle.slice(0, 24).trim();
+        if (prefix.length >= 8) markMatch(rendered, prefix, r);
     }
-    return n;
+}
+
+const MARK_CLASSES = {
+    'low-conf': 'ov-attention',
+    'coverage-gap': 'ov-attention ov-attention--gap',
+    'disagreement': 'ov-attention ov-attention--disagree',
+};
+
+/** Wrap the first text-node occurrence of `needle` in a titled <mark>. */
+function markMatch(rendered, needle, region) {
+    const walker = document.createTreeWalker(rendered, NodeFilter.SHOW_TEXT);
+    let node;
+    while ((node = walker.nextNode())) {
+        if (node.parentElement?.closest('mark')) continue;
+        const idx = node.data.indexOf(needle);
+        if (idx < 0) continue;
+        const range = document.createRange();
+        range.setStart(node, idx);
+        range.setEnd(node, idx + needle.length);
+        const mark = document.createElement('mark');
+        mark.className = MARK_CLASSES[region.kind] || MARK_CLASSES['low-conf'];
+        mark.title = region.tip;
+        try {
+            range.surroundContents(mark);
+            return true;
+        } catch {
+            return false; // partially-intersecting nodes; fall back to overlay only
+        }
+    }
+    return false;
 }
 
 function renderEmpty(mount) {
     mount.classList.add('flex', 'items-center', 'justify-center');
-    mount.classList.remove('items-stretch');
     mount.innerHTML = `
 <div class="text-center text-gray-400">
     <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1" class="w-10 h-10 mb-2 opacity-40 mx-auto">
@@ -385,6 +488,11 @@ function renderEmpty(mount) {
     </svg>
     <p class="text-sm">OCR text and extracted fields will appear here.</p>
 </div>`;
+}
+
+function truncate(s, n) {
+    s = String(s);
+    return s.length > n ? s.slice(0, n - 1) + '…' : s;
 }
 
 function escapeHtml(s) {

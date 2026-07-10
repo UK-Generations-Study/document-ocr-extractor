@@ -3,11 +3,19 @@
  */
 
 /**
- * Combine extracted data from all reports into a flat array
+ * Combine extracted data from all reports into a flat array.
+ *
+ * Identifier columns come first so the output can be joined back to the
+ * study data: metadata-ingested reports carry tcode / docid / yearmonth
+ * (from metadata.csv); every report carries fileName. The metadata columns
+ * are only emitted when at least one report has them, so ad-hoc uploads
+ * keep a clean header.
+ *
  * @param {Object[]} reports - Array of report objects with extractions
- * @returns {Object[]} - Combined data array with fileName as first key
+ * @returns {Object[]} - Combined data array, identifiers first
  */
 export function combineExtractedData(reports) {
+    const anyMetadata = reports.some((r) => r.metadata);
     return reports.reduce((acc, r) => {
         if (r.extractions && r.extractions.length > 0) {
             const merged = {};
@@ -17,7 +25,15 @@ export function combineExtractedData(reports) {
                     merged[key] = value;
                 });
             }
+            const identifiers = anyMetadata
+                ? {
+                    tcode: r.metadata?.tcode ?? null,
+                    docid: r.metadata?.docid ?? null,
+                    yearmonth: r.metadata?.yearmonth ?? null,
+                }
+                : {};
             acc.push({
+                ...identifiers,
                 fileName: r.name,
                 ...merged
             });

@@ -1,39 +1,47 @@
 /**
- * OCR job queue: watches for documents in 'queued' status and runs Quick Read
- * on their pages, storing per-page results in the ocrPages store.
+ * OCR job queue: runs Quick Read over a document's pages, storing per-page
+ * results in the ocrPages store.
  *
  * One document is processed at a time (serial across docs). Within a document,
  * pages are processed sequentially so we can update status + progress
  * incrementally without racing writes on the same record.
  *
+ * Event-driven: app.js routes every `status: 'queued'` bus event here, so the
+ * queue needs no polling. `primeQueueFromDb` runs once at boot to pick up
+ * documents left over from a previous session.
+ *
+ * Failure is terminal: a document whose OCR run errors moves to 'ocr-failed'
+ * (with doc.lastError) and stays there until the user retries. It is NOT
+ * rolled back to 'queued' - that used to re-enqueue it in an infinite loop.
+ *
+ * After a successful run the doc-level low-confidence line count is stored on
+ * the record (doc.lowConfLines) and the review-mode gate is applied:
+ * 'flagged' auto-confirms clean documents, 'auto' confirms everything.
+ *
  * The QuickClient (private-eye's worker facade) is instantiated lazily on the
  * first enqueue. Models are loaded once and stay resident across jobs.
  */
 import { QuickClient } from './workers/client.ts';
+import { emitAppEvent } from '../core/bus.js';
+import { setDocumentStatus } from '../core/status.js';
+import { getSettings, REVIEW_MODES } from '../core/settings.js';
+import { countDocLowConfLines } from './confidence.js';
 import {
     allDocuments,
     getBlob,
     getDocument,
-    putDocument,
+    getOcrPagesByDoc,
     putOcrPage,
 } from '../db.js';
 
 let client = null;      // QuickClient instance (lazy)
 let ready = false;      // set when the worker reports 'ready'
 let readyPromise = null;
-const listeners = new Set(); // subscribers to (event) notifications
 const pending = [];     // FIFO queue of doc IDs to process
 let processing = false; // guard so we don't run two jobs in parallel
 
 function emit(event) {
-    for (const fn of listeners) {
-        try { fn(event); } catch (err) { console.error('[ocr-queue] listener error', err); }
-    }
-}
-
-export function subscribeQueue(fn) {
-    listeners.add(fn);
-    return () => listeners.delete(fn);
+    emitAppEvent({ source: 'ocr', ...event });
 }
 
 async function ensureClient() {
@@ -75,7 +83,7 @@ export function enqueueDocument(docId) {
     tick();
 }
 
-/** Scan the documents store on boot and re-enqueue anything still 'queued'. */
+/** Scan the documents store at boot and enqueue anything still 'queued'. */
 export async function primeQueueFromDb() {
     const docs = await allDocuments();
     for (const d of docs) {
@@ -83,17 +91,17 @@ export async function primeQueueFromDb() {
     }
 }
 
-/** Recover documents left in 'ocr-running' by a session that was closed or
- *  reloaded mid-job. Flip them back to 'queued' so they get picked up by the
- *  next primeQueueFromDb pass. Must be called BEFORE primeQueueFromDb to
- *  avoid a race with a doc genuinely being processed in this session. */
+/** Recover documents left in a *-running state by a session that was closed
+ *  or reloaded mid-job. Flip them back to their re-enqueueable state. Must be
+ *  called BEFORE primeQueueFromDb to avoid a race with a doc genuinely being
+ *  processed in this session. */
 export async function recoverStuckDocuments() {
     const docs = await allDocuments();
     for (const d of docs) {
-        if (d.status === 'ocr-running' || d.status === 'extraction-running') {
-            d.status = d.status === 'ocr-running' ? 'queued' : 'ocr-confirmed';
-            await putDocument(d);
-            emit({ type: 'status', docId: d.id, status: d.status });
+        if (d.status === 'ocr-running') {
+            await setDocumentStatus(d.id, 'queued');
+        } else if (d.status === 'extraction-running') {
+            await setDocumentStatus(d.id, 'ocr-confirmed');
         }
     }
 }
@@ -117,8 +125,7 @@ async function processDocument(docId) {
     if (!doc) return;
     if (doc.status !== 'queued') return; // caught up: user may have re-run or dropped
 
-    // Move to ocr-running.
-    await patchStatus(doc, 'ocr-running');
+    await setDocumentStatus(docId, 'ocr-running');
     emit({ type: 'doc-start', docId });
 
     let c;
@@ -126,20 +133,22 @@ async function processDocument(docId) {
         c = await ensureClient();
     } catch (err) {
         emit({ type: 'doc-error', docId, error: err });
-        // Roll back so the user isn't stuck in "OCR..." forever.
-        await patchStatus(doc, 'queued');
+        await setDocumentStatus(docId, 'ocr-failed', {
+            lastError: `OCR engine failed to start: ${err?.message || err}`,
+        });
+        emit({ type: 'doc-done', docId, failed: true });
         return;
     }
 
     const pages = doc.pages || [];
-    let failed = false;
+    const pageErrors = [];
     for (let i = 0; i < pages.length; i++) {
         const page = pages[i];
         emit({ type: 'page-start', docId, pageIndex: i, pageCount: pages.length });
         const blob = await getBlob(page.blobKey);
         if (!blob) {
             emit({ type: 'page-error', docId, pageIndex: i, error: new Error('page blob missing') });
-            failed = true;
+            pageErrors.push(`page ${i + 1}: stored image missing`);
             continue;
         }
         const url = URL.createObjectURL(blob);
@@ -160,7 +169,7 @@ async function processDocument(docId) {
             });
             emit({ type: 'page-done', docId, pageIndex: i });
         } catch (err) {
-            failed = true;
+            pageErrors.push(`page ${i + 1}: ${err?.message || err}`);
             emit({ type: 'page-error', docId, pageIndex: i, error: err });
         } finally {
             URL.revokeObjectURL(url);
@@ -173,14 +182,24 @@ async function processDocument(docId) {
     // Roll status forward but don't overwrite a later state (e.g., user hit
     // Confirm on the previous run and it's already ocr-confirmed).
     if (latest.status === 'ocr-running') {
-        await patchStatus(latest, failed ? 'queued' : 'ocr-done');
+        if (pageErrors.length) {
+            await setDocumentStatus(docId, 'ocr-failed', { lastError: pageErrors.join('; ') });
+        } else {
+            const ocrPages = await getOcrPagesByDoc(docId);
+            const lowConfLines = countDocLowConfLines(ocrPages);
+            await setDocumentStatus(docId, 'ocr-done', { lowConfLines, lastError: null });
+            await maybeAutoConfirm(docId, lowConfLines);
+        }
     }
-    emit({ type: 'doc-done', docId, failed });
+    emit({ type: 'doc-done', docId, failed: pageErrors.length > 0 });
 }
 
-async function patchStatus(doc, status) {
-    if (doc.status === status) return;
-    doc.status = status;
-    await putDocument(doc);
-    emit({ type: 'status', docId: doc.id, status });
+/** Apply the review-mode gate: skip the human "check text" stop when allowed. */
+async function maybeAutoConfirm(docId, lowConfLines) {
+    const { reviewMode } = await getSettings();
+    const clean = lowConfLines === 0;
+    if (reviewMode === REVIEW_MODES.AUTO || (reviewMode === REVIEW_MODES.FLAGGED && clean)) {
+        // ocr-confirmed routes into the extraction queue via app.js.
+        await setDocumentStatus(docId, 'ocr-confirmed', { ocrAutoConfirmed: true });
+    }
 }

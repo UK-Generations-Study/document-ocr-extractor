@@ -8,15 +8,24 @@
  * per schemaId), and the document transitions:
  *   ocr-confirmed -> extraction-running -> extraction-done
  *
- * The abstractor still has to hit "Confirm" in the extraction form to move on
- * to 'confirmed'; that's the point of the review step. If the LLM is edited
- * after 'confirmed' (in the form), we keep the status at 'confirmed' - only
- * an explicit Reopen rewinds.
+ * Event-driven: app.js routes every `status: 'ocr-confirmed'` bus event here;
+ * `primeExtractionFromDb` runs once at boot for leftovers from a previous
+ * session. There is no polling.
  *
- * Uses the existing provider abstraction (src/providers/*) so no LLM code is
- * duplicated here.
+ * Setup/infrastructure failures (bad credentials, missing config, no OCR
+ * text) are terminal: the doc moves to 'extraction-failed' with doc.lastError
+ * and stays there until the user retries. Rolling back to 'ocr-confirmed'
+ * used to re-enqueue the doc in a loop, re-calling the API every pass.
+ * Per-schema LLM errors are softer: they are recorded on the extraction entry
+ * and the doc still reaches 'extraction-done' so the abstractor can review
+ * whatever succeeded and re-run if needed.
+ *
+ * The abstractor always confirms extracted fields (singly or via the
+ * sidebar's "Confirm all") - review modes never remove that gate.
  */
 import { API_PROVIDERS } from '../core/constants.js';
+import { emitAppEvent } from '../core/bus.js';
+import { setDocumentStatus } from '../core/status.js';
 import { createProvider } from '../providers/registry.js';
 import {
     allDocuments,
@@ -26,20 +35,12 @@ import {
     putDocument,
 } from '../db.js';
 
-const listeners = new Set();
 const pending = [];
 let processing = false;
 let providerCache = null;      // { provider, providerId, apiKey, baseUrl }
 
 function emit(event) {
-    for (const fn of listeners) {
-        try { fn(event); } catch (err) { console.error('[extract] listener error', err); }
-    }
-}
-
-export function subscribeExtract(fn) {
-    listeners.add(fn);
-    return () => listeners.delete(fn);
+    emitAppEvent({ source: 'extract', ...event });
 }
 
 /** Add a doc to the extraction queue if not already scheduled. */
@@ -51,23 +52,11 @@ export function enqueueExtraction(docId) {
     tick();
 }
 
-/** Scan documents on boot and re-enqueue anything sitting in ocr-confirmed. */
+/** Scan documents at boot and enqueue anything sitting in ocr-confirmed. */
 export async function primeExtractionFromDb() {
     const docs = await allDocuments();
     for (const d of docs) {
         if (d.status === 'ocr-confirmed') enqueueExtraction(d.id);
-    }
-}
-
-/** Recover a doc left in extraction-running by an interrupted session. */
-export async function recoverStuckExtraction() {
-    const docs = await allDocuments();
-    for (const d of docs) {
-        if (d.status === 'extraction-running') {
-            d.status = 'ocr-confirmed';
-            await putDocument(d);
-            emit({ type: 'status', docId: d.id, status: d.status });
-        }
     }
 }
 
@@ -90,7 +79,7 @@ async function getProvider(docId) {
     const providerId = activeProvider?.provider || API_PROVIDERS.OPENAI;
     const creds = await getConfigRecord(`llmApiCreds_${providerId}`);
     if (providerId !== API_PROVIDERS.WEBLLM && !creds?.apiKey) {
-        throw new Error('LLM credentials not configured (run the setup wizard).');
+        throw new Error('LLM credentials not configured (open Settings).');
     }
     const ctxWindow = providerId === API_PROVIDERS.WEBLLM
         ? (Number(creds?.contextWindowSize) || 8192)
@@ -139,6 +128,11 @@ async function getProvider(docId) {
     return provider;
 }
 
+async function failDoc(docId, message) {
+    emit({ type: 'doc-error', docId, error: new Error(message) });
+    await setDocumentStatus(docId, 'extraction-failed', { lastError: message });
+}
+
 async function processDoc(docId) {
     const doc = await getDocument(docId);
     if (!doc) return;
@@ -147,7 +141,7 @@ async function processDoc(docId) {
     const appConfig = await getConfigRecord('appConfig');
     const modelRec = await getConfigRecord('model');
     if (!appConfig?.schemaFiles?.length || !appConfig?.systemPrompt || !modelRec?.name) {
-        emit({ type: 'doc-error', docId, error: new Error('extraction setup incomplete') });
+        await failDoc(docId, 'Extraction setup incomplete - pick a schema and model in Settings.');
         return;
     }
 
@@ -162,29 +156,25 @@ async function processDoc(docId) {
         })
         .join('\n\n');
     if (!orderedText.trim()) {
-        emit({ type: 'doc-error', docId, error: new Error('no OCR text for extraction') });
+        await failDoc(docId, 'No OCR text to extract from - re-run OCR first.');
         return;
     }
 
-    doc.status = 'extraction-running';
-    await putDocument(doc);
+    await setDocumentStatus(docId, 'extraction-running');
     emit({ type: 'doc-start', docId });
-    emit({ type: 'status', docId, status: 'extraction-running' });
 
     let provider;
     try {
         provider = await getProvider(docId);
     } catch (err) {
-        emit({ type: 'doc-error', docId, error: err });
-        // Roll status back so the user can fix config and try again.
-        doc.status = 'ocr-confirmed';
-        await putDocument(doc);
-        emit({ type: 'status', docId, status: 'ocr-confirmed' });
+        await failDoc(docId, err?.message || String(err));
         return;
     }
 
     // Fresh extractions array so a re-run doesn't leak stale keys.
+    doc.status = 'extraction-running';
     doc.extractions = [];
+    doc.lastError = null;
     const schemas = appConfig.schemaFiles;
     for (let i = 0; i < schemas.length; i++) {
         const schema = schemas[i];
@@ -211,9 +201,6 @@ async function processDoc(docId) {
         }
     }
 
-    doc.status = 'extraction-done';
-    doc.extractedAt = Date.now();
-    await putDocument(doc);
+    await setDocumentStatus(docId, 'extraction-done', { extractedAt: Date.now() });
     emit({ type: 'doc-done', docId });
-    emit({ type: 'status', docId, status: 'extraction-done' });
 }
