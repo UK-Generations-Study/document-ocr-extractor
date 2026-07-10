@@ -17,8 +17,19 @@
  *   - 'disagreement' cross-model review items from Deep OCR (numeric
  *                    conflicts between the OCR and VLM readings).
  */
-export const LOW_CONF_THRESHOLD = 0.6;
-export const WORST_CHAR_THRESHOLD = 0.35;
+import { getCachedSettings } from '../core/settings.js';
+
+/**
+ * The user-tunable line threshold lives in settings (lowConfThreshold,
+ * default 0.6). The worst-character bar scales with it at 60% so one badly
+ * smudged character still flags an otherwise-confident line; at the default
+ * that is 0.36.
+ */
+function thresholds() {
+    const t = Number(getCachedSettings().lowConfThreshold);
+    const line = Number.isFinite(t) && t > 0 && t < 1 ? t : 0.6;
+    return { line, worstChar: line * 0.6 };
+}
 
 /** The confidence scalar we triage a line by. Null when the line has none.
  *  Legacy avgConf/conf fields kept for records written by older sessions. */
@@ -40,12 +51,13 @@ export function attentionRegions(uncertainty) {
     if (!uncertainty) return [];
     const out = [];
     const lines = Array.isArray(uncertainty.lines) ? uncertainty.lines : [];
+    const { line: lineThreshold, worstChar } = thresholds();
 
     for (const line of lines) {
         const conf = lineConfidence(line);
         const worst = typeof line?.min === 'number' ? line.min : null;
-        const weak = (typeof conf === 'number' && conf < LOW_CONF_THRESHOLD)
-            || (typeof worst === 'number' && worst < WORST_CHAR_THRESHOLD);
+        const weak = (typeof conf === 'number' && conf < lineThreshold)
+            || (typeof worst === 'number' && worst < worstChar);
         if (!weak) continue;
         const shown = Math.round(((conf ?? worst) || 0) * 100);
         out.push({

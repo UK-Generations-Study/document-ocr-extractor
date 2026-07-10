@@ -11,6 +11,9 @@
  * never disappears.
  *
  * syncScroll is the default state of the page-image <-> OCR-text scroll link.
+ *
+ * lowConfThreshold is the calibrated-confidence bar under which an OCR line
+ * counts as "needs a look" (see src/ocr/confidence.js for how it is applied).
  */
 import { getConfigRecord, saveConfigRecord } from '../db.js';
 import { emitAppEvent } from './bus.js';
@@ -24,6 +27,7 @@ export const REVIEW_MODES = {
 const DEFAULTS = {
     reviewMode: REVIEW_MODES.MANUAL,
     syncScroll: true,
+    lowConfThreshold: 0.6,
 };
 
 let cache = null;
@@ -34,6 +38,13 @@ export async function getSettings() {
     const { id, ...saved } = rec || {};
     cache = { ...DEFAULTS, ...saved };
     return cache;
+}
+
+/** Synchronous accessor for hot paths (per-line confidence checks). Returns
+ *  defaults until the first getSettings() resolves - app.js warms the cache
+ *  at boot before any OCR result is rendered or counted. */
+export function getCachedSettings() {
+    return cache || DEFAULTS;
 }
 
 export async function saveSettings(patch) {

@@ -178,16 +178,26 @@ export async function refresh() {
 
 // ---------- selection helpers (used by keyboard shortcuts + auto-advance) ----------
 
-/** The docs matching the active filter chip + search term, in list order. */
+/** The docs matching the active filter chip + search term, grouped so all
+ *  reports of one TCode sit together (order of first appearance). J/K
+ *  navigation and rendering both follow this visual order. */
 function visibleDocs() {
     const filter = FILTERS.find((f) => f.id === activeFilter) || FILTERS[0];
-    return currentDocs.filter((d) => {
+    const filtered = currentDocs.filter((d) => {
         if (filter.statuses && !filter.statuses.includes(d.status)) return false;
         if (!searchTerm) return true;
         const m = d.metadata;
         const hay = `${d.name || ''} ${m?.tcode || ''} ${m?.docid || ''}`.toLowerCase();
         return hay.includes(searchTerm);
     });
+    const order = [];
+    const groups = new Map(); // tcode (or per-doc key) -> docs
+    for (const d of filtered) {
+        const key = d.metadata?.tcode || `solo:${d.id}`;
+        if (!groups.has(key)) { groups.set(key, []); order.push(key); }
+        groups.get(key).push(d);
+    }
+    return order.flatMap((k) => groups.get(k));
 }
 
 /** Move the selection by delta within the visible rows (J/K navigation). */
@@ -438,7 +448,20 @@ function renderRows() {
     }
 
     const selected = selectionRef?.getSelected();
-    scroll.innerHTML = docs.map((d) => rowHtml(d, d.id === selected)).join('');
+    // Group headers for TCodes (visibleDocs already placed same-TCode
+    // reports consecutively); solo uploads render as plain rows.
+    let html = '';
+    for (let i = 0; i < docs.length; i++) {
+        const tcode = docs[i].metadata?.tcode || null;
+        const prev = i > 0 ? (docs[i - 1].metadata?.tcode || null) : null;
+        if (tcode && tcode !== prev) {
+            let run = i;
+            while (run < docs.length && (docs[run].metadata?.tcode || null) === tcode) run++;
+            html += groupHeaderHtml(tcode, run - i);
+        }
+        html += rowHtml(docs[i], docs[i].id === selected, !!tcode);
+    }
+    scroll.innerHTML = html;
 
     // Row click -> select.
     scroll.querySelectorAll('[data-doc-id]').forEach((row) => {
@@ -473,41 +496,43 @@ function renderRows() {
     scroll.querySelector('[aria-current="true"]')?.scrollIntoView({ block: 'nearest' });
 }
 
-function rowHtml(doc, isSelected) {
+function groupHeaderHtml(tcode, count) {
+    return `
+<div class="px-3 py-1 bg-gray-100/80 border-b border-gray-200 flex items-baseline justify-between">
+    <span class="text-[11px] font-semibold tracking-wide text-gray-700">${escapeHtml(tcode)}</span>
+    <span class="text-[10px] text-gray-400">${count} report${count === 1 ? '' : 's'}</span>
+</div>`;
+}
+
+/**
+ * One compact single-line row (batches run to hundreds of reports, so
+ * height matters). Status is the colored dot + short label; docid/name
+ * truncates; page count and date live in the hover tooltip only.
+ */
+function rowHtml(doc, isSelected, grouped) {
     const status = STATUS_META[doc.status] || STATUS_META.queued;
     const m = doc.metadata;
-    const title = m?.tcode || doc.name || 'Untitled report';
-    const subtitleParts = [];
-    if (m?.docid) subtitleParts.push(m.docid);
-    if (m?.yearmonthLabel) subtitleParts.push(m.yearmonthLabel);
-    const pageCount = doc.pages?.length ?? 0;
+    const label = grouped ? (m?.docid || doc.name) : (m?.tcode || doc.name || 'Untitled report');
+    const tipParts = [doc.name, m?.yearmonthLabel, `${doc.pages?.length ?? 0} page${(doc.pages?.length ?? 0) === 1 ? '' : 's'}`, status.label];
     const lowConf = doc.status === 'ocr-done' && doc.lowConfLines > 0
-        ? `<span class="inline-flex items-center rounded bg-yellow-50 text-yellow-800 ring-1 ring-inset ring-yellow-300 px-1 py-px text-[10px]"
-                 title="Lines the OCR engine was unsure about">${doc.lowConfLines} unsure</span>`
+        ? `<span class="shrink-0 inline-flex items-center rounded bg-yellow-50 text-yellow-800 ring-1 ring-inset ring-yellow-300 px-1 text-[10px]"
+                 title="${doc.lowConfLines} region${doc.lowConfLines === 1 ? '' : 's'} the OCR engine was unsure about">${doc.lowConfLines}</span>`
         : '';
 
     return `
 <div data-doc-id="${doc.id}" ${isSelected ? 'aria-current="true"' : ''}
-     class="group cursor-pointer border-b border-gray-100 px-3 py-2 ${isSelected ? 'bg-green-50 border-l-2 border-l-green-700' : 'border-l-2 border-l-transparent hover:bg-gray-50'}">
-    <div class="flex items-center justify-between gap-2">
-        <span class="text-sm font-medium text-gray-900 truncate" title="${escapeAttr(doc.name || '')}">${escapeHtml(title)}</span>
-        <span class="shrink-0 inline-flex items-center gap-1.5 text-[11px] ${status.text}">
-            <span class="w-1.5 h-1.5 rounded-full ${status.dot}"></span>${status.label}
-        </span>
-    </div>
-    <div class="mt-0.5 flex items-center justify-between gap-2 text-xs text-gray-500">
-        <span class="truncate">${escapeHtml(subtitleParts.join(' · '))}</span>
-        <span class="shrink-0 flex items-center gap-1.5">
-            ${lowConf}
-            <span>${pageCount}p</span>
-            <button type="button" data-delete-id="${doc.id}" title="Delete report" aria-label="Delete report"
-                    class="opacity-0 group-hover:opacity-100 focus:opacity-100 text-gray-400 hover:text-red-600 transition-opacity">
-                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-3.5 h-3.5">
-                    <path fill-rule="evenodd" d="M8.75 1A2.75 2.75 0 006 3.75v.443c-.795.077-1.584.176-2.365.298a.75.75 0 10.23 1.482l.149-.022.841 10.518A2.75 2.75 0 007.596 19h4.807a2.75 2.75 0 002.742-2.53l.841-10.52.149.023a.75.75 0 00.23-1.482A41.03 41.03 0 0014 4.193V3.75A2.75 2.75 0 0011.25 1h-2.5zM10 4c.84 0 1.673.025 2.5.075V3.75c0-.69-.56-1.25-1.25-1.25h-2.5c-.69 0-1.25.56-1.25 1.25v.325C8.327 4.025 9.16 4 10 4zM8.58 7.72a.75.75 0 00-1.5.06l.3 7.5a.75.75 0 101.5-.06l-.3-7.5zm4.34.06a.75.75 0 10-1.5-.06l-.3 7.5a.75.75 0 101.5.06l.3-7.5z" clip-rule="evenodd"/>
-                </svg>
-            </button>
-        </span>
-    </div>
+     title="${escapeAttr(tipParts.filter(Boolean).join(' · '))}"
+     class="group cursor-pointer flex items-center gap-2 border-b border-gray-50 ${grouped ? 'pl-5' : 'pl-3'} pr-2 py-1.5 ${isSelected ? 'bg-green-50 border-l-2 border-l-green-700' : 'border-l-2 border-l-transparent hover:bg-gray-50'}">
+    <span class="w-2 h-2 rounded-full shrink-0 ${status.dot}"></span>
+    <span class="flex-1 min-w-0 truncate text-xs font-medium text-gray-900">${escapeHtml(label)}</span>
+    ${lowConf}
+    <span class="shrink-0 text-[10px] whitespace-nowrap ${status.text}">${status.label}</span>
+    <button type="button" data-delete-id="${doc.id}" title="Delete report" aria-label="Delete report"
+            class="shrink-0 opacity-0 group-hover:opacity-100 focus:opacity-100 text-gray-400 hover:text-red-600 transition-opacity">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-3.5 h-3.5">
+            <path fill-rule="evenodd" d="M8.75 1A2.75 2.75 0 006 3.75v.443c-.795.077-1.584.176-2.365.298a.75.75 0 10.23 1.482l.149-.022.841 10.518A2.75 2.75 0 007.596 19h4.807a2.75 2.75 0 002.742-2.53l.841-10.52.149.023a.75.75 0 00.23-1.482A41.03 41.03 0 0014 4.193V3.75A2.75 2.75 0 0011.25 1h-2.5zM10 4c.84 0 1.673.025 2.5.075V3.75c0-.69-.56-1.25-1.25-1.25h-2.5c-.69 0-1.25.56-1.25 1.25v.325C8.327 4.025 9.16 4 10 4zM8.58 7.72a.75.75 0 00-1.5.06l.3 7.5a.75.75 0 101.5-.06l-.3-7.5zm4.34.06a.75.75 0 10-1.5-.06l-.3 7.5a.75.75 0 101.5.06l.3-7.5z" clip-rule="evenodd"/>
+        </svg>
+    </button>
 </div>`;
 }
 

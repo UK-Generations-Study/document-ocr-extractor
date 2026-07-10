@@ -21,9 +21,10 @@
  * subtitle under the field label.
  */
 import { getConfigRecord, getDocument, putDocument } from '../db.js';
-import { onAppEvent, emitAppEvent } from '../core/bus.js';
+import { onAppEvent } from '../core/bus.js';
 import { setDocumentStatus } from '../core/status.js';
 import { confirmExtraction } from './reviewFlow.js';
+import { paneTabsHtml, wirePaneTabs } from './paneTabs.js';
 
 const MOUNT_ID = 'work-surface';
 
@@ -135,12 +136,8 @@ async function render() {
     wireViewToggle(mount, doc);
 }
 
-/** "View text": flip the work pane to the (read-only) OCR view without
- *  touching the document's status. app.js owns the override. */
 function wireViewToggle(mount, doc) {
-    mount.querySelector('#ex-view-ocr')?.addEventListener('click', () => {
-        emitAppEvent({ source: 'ui', type: 'set-pane', docId: doc.id, pane: 'ocr' });
-    });
+    wirePaneTabs(mount, doc.id);
 }
 
 function waitingStateHtml(doc) {
@@ -261,22 +258,18 @@ function formHtml(doc, st, schemas) {
 }
 
 function headerHtml(doc, { label, tone, controls }) {
-    // "View text" is always present so the abstractor can flip to the OCR
-    // text (read-only) at any stage; matches the viewer/OCR pane header
-    // metrics (min-h-16) so the panes' first pages align.
-    const viewTextBtn = `
-<button id="ex-view-ocr" type="button"
-    title="Show this report's OCR text (read-only; use Reopen there to edit and re-extract)"
-    class="rounded-md border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50">
-    View text
-</button>`;
+    // Matches the OCR/viewer pane header metrics (h-16) so the panes' first
+    // pages align; the Text/Fields tabs top-right flip the work pane view.
     return `
-<div class="sticky top-0 z-10 -mx-4 px-4 h-16 bg-white/90 backdrop-blur border-b border-gray-200 flex flex-col justify-center gap-1">
-    <div class="flex items-baseline gap-2 min-w-0 text-xs">
-        <span class="text-gray-500 truncate shrink-0 max-w-[40%]">${escapeHtml(doc.metadata?.tcode || doc.name)}</span>
-        <span class="truncate ${tone || 'text-gray-500'}">${label}</span>
+<div class="sticky top-0 z-10 -mx-4 px-4 h-16 bg-white/90 backdrop-blur border-b border-gray-200 flex items-center justify-between gap-3">
+    <div class="min-w-0 flex-1 flex flex-col justify-center gap-1">
+        <div class="flex items-baseline gap-2 min-w-0 text-xs">
+            <span class="text-gray-500 truncate shrink-0 max-w-[40%]">${escapeHtml(doc.metadata?.tcode || doc.name)}</span>
+            <span class="truncate ${tone || 'text-gray-500'}">${label}</span>
+        </div>
+        ${controls ? `<div class="flex items-center gap-2 flex-nowrap overflow-x-auto [&>button]:whitespace-nowrap [&>button]:shrink-0">${controls}</div>` : ''}
     </div>
-    <div class="flex items-center gap-2 flex-nowrap overflow-x-auto [&>button]:whitespace-nowrap [&>button]:shrink-0">${controls || ''}${viewTextBtn}</div>
+    <div class="shrink-0">${paneTabsHtml(doc, 'fields')}</div>
 </div>`;
 }
 

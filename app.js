@@ -26,7 +26,8 @@ import {
     deleteConfigRecord,
 } from './src/db.js';
 import { onAppEvent } from './src/core/bus.js';
-import { OCR_PANE_STATUSES, EXTRACTION_PANE_STATUSES } from './src/core/status.js';
+import { getSettings } from './src/core/settings.js';
+import { EXTRACTION_PANE_STATUSES } from './src/core/status.js';
 import { openWizard } from './src/ui/wizard.js';
 import { openSettingsPanel } from './src/ui/settingsPanel.js';
 import {
@@ -413,11 +414,14 @@ function wireBus() {
 
         // Sidebar + work-pane refresh.
         const refreshTypes = ev.type === 'status' || ev.type === 'doc-done' || ev.type === 'doc-start'
-            || ev.type === 'schema-done' || ev.type === 'enqueued';
+            || ev.type === 'schema-done' || ev.type === 'enqueued' || ev.type === 'flags-recomputed';
         if (refreshTypes) {
             scheduleListRefresh();
             const sel = selection.getSelected();
             if (ev.type === 'status' && sel && sel === ev.docId) await routeWorkPane(sel);
+            // Threshold changed: redraw the selected doc so overlays,
+            // highlights, and badges reflect the new bar.
+            if (ev.type === 'flags-recomputed' && sel) await routeWorkPane(sel);
         }
     });
 }
@@ -456,6 +460,9 @@ function bindKeyboard() {
 }
 
 async function mountWorkspace() {
+    // Warm the settings cache before anything renders or counts OCR
+    // confidence - confidence.js reads it synchronously.
+    await getSettings();
     await mountReportList({ selection });
     mountReportViewer({ selection });
     initOcrView();

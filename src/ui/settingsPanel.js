@@ -9,6 +9,9 @@
  * longer means re-walking schema + credentials.
  */
 import { getSettings, saveSettings, REVIEW_MODES } from '../core/settings.js';
+import { allDocuments, getOcrPagesByDoc, putDocument } from '../db.js';
+import { emitAppEvent } from '../core/bus.js';
+import { countDocLowConfLines } from '../ocr/confidence.js';
 import { isSyncEnabled, setSyncEnabled } from './syncScroll.js';
 import { showToast } from './toast.js';
 
@@ -86,6 +89,21 @@ export async function openSettingsPanel(deps) {
                         </span>
                     </label>`).join('')}
                 </div>
+                <div class="mt-4">
+                    <div class="flex items-center justify-between">
+                        <label for="sp-threshold" class="text-sm font-medium text-gray-900">OCR confidence threshold</label>
+                        <span id="sp-threshold-value" class="text-sm font-mono text-gray-700">${Math.round(settings.lowConfThreshold * 100)}%</span>
+                    </div>
+                    <input id="sp-threshold" type="range" min="0.3" max="0.9" step="0.05"
+                           value="${settings.lowConfThreshold}"
+                           class="mt-1 w-full accent-green-700"/>
+                    <p class="mt-1 text-xs text-gray-500">
+                        Text the OCR engine read with confidence below this is flagged for review
+                        (boxed on the page, highlighted in the text, counted in "unsure").
+                        Higher flags more; lower flags less. Also sets the bar for the
+                        "review flagged only" mode.
+                    </p>
+                </div>
             </section>
 
             <!-- View -->
@@ -128,9 +146,44 @@ export async function openSettingsPanel(deps) {
         });
     });
 
+    // Threshold slider: live % readout on input; persist + recompute the
+    // stored per-doc "unsure" counts on release.
+    const slider = mount.querySelector('#sp-threshold');
+    const sliderValue = mount.querySelector('#sp-threshold-value');
+    slider.addEventListener('input', () => {
+        sliderValue.textContent = `${Math.round(Number(slider.value) * 100)}%`;
+    });
+    slider.addEventListener('change', async () => {
+        const value = Number(slider.value);
+        await saveSettings({ lowConfThreshold: value });
+        const n = await recomputeDocFlags();
+        emitAppEvent({ source: 'settings', type: 'flags-recomputed' });
+        showToast(`Confidence threshold set to ${Math.round(value * 100)}%${n ? ` - re-flagged ${n} report${n === 1 ? '' : 's'}` : ''}.`, { tone: 'success' });
+    });
+
     mount.querySelector('#sp-sync').addEventListener('change', (e) => {
         setSyncEnabled(e.target.checked);
     });
+}
+
+/** Recount every OCR'd document's attention flags under the new threshold so
+ *  the sidebar badges (doc.lowConfLines) stay truthful. Returns the number of
+ *  documents whose count changed. */
+async function recomputeDocFlags() {
+    const docs = await allDocuments();
+    let changed = 0;
+    for (const d of docs) {
+        if (d.status === 'queued' || d.status === 'ocr-running' || d.status === 'ocr-failed') continue;
+        const pages = await getOcrPagesByDoc(d.id);
+        if (!pages.length) continue;
+        const n = countDocLowConfLines(pages);
+        if (n !== d.lowConfLines) {
+            d.lowConfLines = n;
+            await putDocument(d);
+            changed++;
+        }
+    }
+    return changed;
 }
 
 function configRowHtml(label, value, step) {

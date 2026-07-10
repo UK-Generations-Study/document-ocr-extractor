@@ -24,10 +24,12 @@ import { micromark } from 'micromark';
 import { gfm, gfmHtml } from 'micromark-extension-gfm';
 import TurndownService from 'turndown';
 import { getDocument, getOcrPagesByDoc, putOcrPage } from '../db.js';
-import { onAppEvent, emitAppEvent } from '../core/bus.js';
+import { onAppEvent } from '../core/bus.js';
 import { setDocumentStatus } from '../core/status.js';
 import { attentionRegions } from '../ocr/confidence.js';
 import { confirmOcr } from './reviewFlow.js';
+import { confirmDialog } from './toast.js';
+import { paneTabsHtml, wirePaneTabs } from './paneTabs.js';
 import { cancelCurrentDeep, enqueueDeep } from '../ocr/deepQueue.js';
 
 const MOUNT_ID = 'work-surface';
@@ -167,8 +169,21 @@ async function renderFor(docId, { force } = {}) {
     mount.querySelector('#ov-confirm')?.addEventListener('click', async () => {
         await confirmOcr(docId);
     });
+    // Reopen scrubs the extraction: the report resets to its post-OCR state
+    // (Fields tab greys out) and will be re-extracted after re-confirmation.
     mount.querySelector('#ov-reopen')?.addEventListener('click', async () => {
-        await setDocumentStatus(docId, 'ocr-done');
+        const d = await getDocument(docId);
+        const hasExtraction = !!d?.extractions?.length;
+        if (hasExtraction) {
+            const ok = await confirmDialog({
+                title: 'Reopen text for editing',
+                bodyHtml: 'This discards the extracted fields for this report (including any edits to them). After you confirm the text again, extraction runs fresh.',
+                confirmLabel: 'Reopen and discard',
+                danger: true,
+            });
+            if (!ok) return;
+        }
+        await setDocumentStatus(docId, 'ocr-done', { extractions: [], extractedAt: null, lastError: null });
         renderFor(docId, { force: true });
     });
     mount.querySelector('#ov-retry')?.addEventListener('click', async () => {
@@ -187,11 +202,7 @@ async function renderFor(docId, { force } = {}) {
     mount.querySelector('#ov-deep-cancel')?.addEventListener('click', () => {
         cancelCurrentDeep();
     });
-    // Available when this (read-only) text view was opened over an
-    // extraction-family status: switch the pane back to the fields.
-    mount.querySelector('#ov-view-fields')?.addEventListener('click', () => {
-        emitAppEvent({ source: 'ui', type: 'set-pane', docId, pane: null });
-    });
+    wirePaneTabs(mount, docId);
 }
 
 function headerHtml(doc, ocrByKey) {
@@ -217,10 +228,6 @@ function headerHtml(doc, ocrByKey) {
     class="rounded-md bg-green-800 px-3 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-green-700">
     Confirm text
 </button>
-<button id="ov-retry" type="button"
-    class="rounded-md border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50">
-    Re-run OCR
-</button>
 ${deepButtonHtml(anyDeep, deep)}`;
             break;
         case 'ocr-failed':
@@ -238,12 +245,8 @@ ${deepButtonHtml(anyDeep, deep)}`;
         case 'exported':
             statusLine = `<span class="text-green-700">Text confirmed (read-only).</span>`;
             controls = `
-<button id="ov-view-fields" type="button"
-    class="rounded-md bg-green-800 px-3 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-green-700">
-    View extracted fields
-</button>
 <button id="ov-reopen" type="button"
-    title="Unlock the text for editing; the report will need re-extraction after"
+    title="Discards the extracted fields and unlocks the text for editing; extraction re-runs after you re-confirm"
     class="rounded-md border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50">
     Reopen for edit
 </button>`;
@@ -255,15 +258,18 @@ ${deepButtonHtml(anyDeep, deep)}`;
     // Exactly h-16 to match the viewer pane's header, so the first page in
     // both panes starts at the same offset. The controls row scrolls
     // horizontally rather than wrapping (wrapping would grow the header and
-    // break the alignment).
+    // break the alignment). Text/Fields tabs sit top-right.
     return `
-<div class="sticky top-0 z-10 -mx-4 px-4 h-16 bg-white/90 backdrop-blur border-b border-gray-200 flex flex-col justify-center gap-1">
-    <div class="flex items-baseline gap-2 min-w-0 text-xs">
-        <span class="text-gray-500 truncate shrink-0 max-w-[40%]">${escapeHtml(doc.metadata?.tcode || doc.name)}</span>
-        <span class="truncate">${statusLine}</span>
+<div class="sticky top-0 z-10 -mx-4 px-4 h-16 bg-white/90 backdrop-blur border-b border-gray-200 flex items-center justify-between gap-3">
+    <div class="min-w-0 flex-1 flex flex-col justify-center gap-1">
+        <div class="flex items-baseline gap-2 min-w-0 text-xs">
+            <span class="text-gray-500 truncate shrink-0 max-w-[40%]">${escapeHtml(doc.metadata?.tcode || doc.name)}</span>
+            <span class="truncate">${statusLine}</span>
+        </div>
+        ${controls ? `<div class="flex items-center gap-2 flex-nowrap overflow-x-auto [&>button]:whitespace-nowrap [&>button]:shrink-0">${controls}</div>` : ''}
+        ${deepProgressBarHtml(deep)}
     </div>
-    ${controls ? `<div class="flex items-center gap-2 flex-nowrap overflow-x-auto [&>button]:whitespace-nowrap [&>button]:shrink-0">${controls}</div>` : ''}
-    ${deepProgressBarHtml(deep)}
+    <div class="shrink-0">${paneTabsHtml(doc, 'ocr')}</div>
 </div>`;
 }
 

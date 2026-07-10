@@ -43,6 +43,10 @@ export function mountReportViewer({ selection }) {
             && ev.docId && ev.docId === currentDocId) {
             renderFor(currentDocId, { force: true });
         }
+        // Confidence threshold changed: overlays need recomputing.
+        if (ev.type === 'flags-recomputed' && currentDocId) {
+            renderFor(currentDocId, { force: true });
+        }
     });
 }
 
