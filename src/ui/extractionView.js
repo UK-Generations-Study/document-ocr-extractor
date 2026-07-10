@@ -310,7 +310,7 @@ function fieldHtml(key, prop, value, readonly) {
 <div data-field="${escapeAttr(key)}" data-kind="enum">
     ${labelHtml}
     <div class="flex items-center gap-1">
-        <select class="ex-input flex-1 rounded-md border border-gray-300 px-2 py-1 text-sm focus:border-green-600 focus:outline-none focus:ring-1 focus:ring-green-600" ${readonly ? 'disabled' : ''}>
+        <select class="ex-input flex-1 rounded-md border border-gray-300 px-2 py-1 text-sm text-gray-900 disabled:text-gray-900 disabled:opacity-100 focus:border-green-600 focus:outline-none focus:ring-1 focus:ring-green-600" ${readonly ? 'disabled' : ''}>
             ${options}
         </select>
         ${legend}
@@ -347,7 +347,7 @@ function fieldHtml(key, prop, value, readonly) {
             return `
 <div data-field="${escapeAttr(key)}" data-kind="bool-nullable">
     ${labelHtml}
-    <select class="ex-input w-full rounded-md border border-gray-300 px-2 py-1 text-sm focus:border-green-600 focus:outline-none focus:ring-1 focus:ring-green-600" ${readonly ? 'disabled' : ''}>${opts}</select>
+    <select class="ex-input w-full rounded-md border border-gray-300 px-2 py-1 text-sm text-gray-900 disabled:text-gray-900 disabled:opacity-100 focus:border-green-600 focus:outline-none focus:ring-1 focus:ring-green-600" ${readonly ? 'disabled' : ''}>${opts}</select>
 </div>`;
         }
         return `
@@ -365,7 +365,7 @@ function fieldHtml(key, prop, value, readonly) {
 <div data-field="${escapeAttr(key)}" data-kind="number">
     ${labelHtml}
     <input type="number" step="${step}" value="${escapeAttr(val)}"
-        class="ex-input w-full rounded-md border border-gray-300 px-2 py-1 text-sm focus:border-green-600 focus:outline-none focus:ring-1 focus:ring-green-600"
+        class="ex-input w-full rounded-md border border-gray-300 px-2 py-1 text-sm text-gray-900 disabled:text-gray-900 disabled:opacity-100 focus:border-green-600 focus:outline-none focus:ring-1 focus:ring-green-600"
         ${readonly ? 'readonly' : ''} placeholder="${nullable ? '(blank = null)' : ''}"/>
 </div>`;
     }
@@ -376,7 +376,7 @@ function fieldHtml(key, prop, value, readonly) {
 <div data-field="${escapeAttr(key)}" data-kind="string">
     ${labelHtml}
     <input type="text" value="${escapeAttr(val)}"
-        class="ex-input w-full rounded-md border border-gray-300 px-2 py-1 text-sm focus:border-green-600 focus:outline-none focus:ring-1 focus:ring-green-600"
+        class="ex-input w-full rounded-md border border-gray-300 px-2 py-1 text-sm text-gray-900 disabled:text-gray-900 disabled:opacity-100 focus:border-green-600 focus:outline-none focus:ring-1 focus:ring-green-600"
         ${readonly ? 'readonly' : ''} placeholder="${nullable ? '(blank = null)' : ''}"/>
 </div>`;
 }
@@ -411,7 +411,7 @@ function genericFieldHtml(key, value, readonly) {
         return `
 <div class="space-y-1" data-field="${escapeAttr(key)}" data-kind="generic-array">
     ${label}
-    <input type="text" value="${escapeAttr(JSON.stringify(value))}" class="ex-input w-full rounded-md border border-gray-300 px-3 py-1.5 text-sm font-mono" ${readonly ? 'readonly' : ''}/>
+    <input type="text" value="${escapeAttr(JSON.stringify(value))}" class="ex-input w-full rounded-md border border-gray-300 px-3 py-1.5 text-sm text-gray-900 font-mono" ${readonly ? 'readonly' : ''}/>
 </div>`;
     }
     if (typeof value === 'boolean') {
@@ -425,7 +425,7 @@ function genericFieldHtml(key, value, readonly) {
     return `
 <div class="space-y-1" data-field="${escapeAttr(key)}" data-kind="string">
     ${label}
-    <input type="text" value="${escapeAttr(val)}" class="ex-input w-full rounded-md border border-gray-300 px-3 py-1.5 text-sm" ${readonly ? 'readonly' : ''}/>
+    <input type="text" value="${escapeAttr(val)}" class="ex-input w-full rounded-md border border-gray-300 px-3 py-1.5 text-sm text-gray-900" ${readonly ? 'readonly' : ''}/>
 </div>`;
 }
 
