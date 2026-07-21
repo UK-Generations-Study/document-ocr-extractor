@@ -6,10 +6,10 @@
  * Combine extracted data from all reports into a flat array.
  *
  * Identifier columns come first so the output can be joined back to the
- * study data: metadata-ingested reports carry TCode / docid / yearmonth
- * (column headers match metadata.csv's casing for TCode); every report
- * carries fileName. The metadata columns are only emitted when at least one
- * report has them, so ad-hoc uploads keep a clean header.
+ * study data: metadata-ingested reports carry TCode / CB_DOCID / yearmonth
+ * (column headers match metadata.csv); every report carries fileName. The
+ * metadata columns are only emitted when at least one report has them, so
+ * ad-hoc uploads keep a clean header.
  *
  * @param {Object[]} reports - Array of report objects with extractions
  * @returns {Object[]} - Combined data array, identifiers first
@@ -28,7 +28,7 @@ export function combineExtractedData(reports) {
             const identifiers = anyMetadata
                 ? {
                     TCode: r.metadata?.tcode ?? null,
-                    docid: r.metadata?.docid ?? null,
+                    CB_DOCID: r.metadata?.docid ?? null,
                     yearmonth: r.metadata?.yearmonth ?? null,
                 }
                 : {};
