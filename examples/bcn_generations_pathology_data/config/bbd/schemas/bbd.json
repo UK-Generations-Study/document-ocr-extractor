@@ -1,5 +1,5 @@
 {
-  "$id": "https://github.com/jeyabbalas/medical-report-information-extractor/tree/main/examples/bcn_generations_pathology_data/config/bbd/schemas/bbd.json",
+  "$id": "https://github.com/UK-Generations-Study/document-ocr-extractor/tree/main/examples/bcn_generations_pathology_data/config/bbd/schemas/bbd.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Benign breast disease pathology schema",
   "description": "Monolithic schema for variables extracted from benign breast disease (BBD) pathology reports (needle biopsies, vacuum-assisted biopsies, and excision specimens). Covers procedural context, calcification workup, the RCPath B-classification, the pathologist's overall benign/malignant/uncertain verdict, the specific pathological findings mentioned, and category-level presence/absence flags for atypia, in situ carcinoma, and invasive carcinoma. Note: this schema is intentionally BBD-focused; if a specimen is B5 (malignant) the finer-grained cancer variables (histological grade, receptor status, size, node counts, TNM, etc.) are captured elsewhere.",
@@ -20,7 +20,7 @@
   "x-version": "1.0.0",
   "x-provenance": {
     "x-lastModified": "2026-07-01",
-    "x-repository": "https://github.com/jeyabbalas/medical-report-information-extractor",
+    "x-repository": "https://github.com/UK-Generations-Study/document-ocr-extractor",
     "x-maintainer": "Medical Report Information Extractor"
   },
   "x-primaryKey": ["fileName"],

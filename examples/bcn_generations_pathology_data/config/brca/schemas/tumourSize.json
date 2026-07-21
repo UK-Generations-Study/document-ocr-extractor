@@ -1,5 +1,5 @@
 {
-  "$id": "https://github.com/jeyabbalas/medical-report-information-extractor/tree/main/examples/bcn_generations_pathology_data/config/brca/schemas/tumourSize.json",
+  "$id": "https://github.com/UK-Generations-Study/document-ocr-extractor/tree/main/examples/bcn_generations_pathology_data/config/brca/schemas/tumourSize.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Tumour size schema",
   "description": "Schema for tumour sizes (whole tumour, DCIS-only component, invasive component) in millimetres extracted from breast cancer pathology reports.",
@@ -8,7 +8,7 @@
   "x-version": "1.0.0",
   "x-provenance": {
     "x-lastModified": "2026-07-01",
-    "x-repository": "https://github.com/jeyabbalas/medical-report-information-extractor",
+    "x-repository": "https://github.com/UK-Generations-Study/document-ocr-extractor",
     "x-maintainer": "Medical Report Information Extractor"
   },
   "x-primaryKey": ["fileName"],

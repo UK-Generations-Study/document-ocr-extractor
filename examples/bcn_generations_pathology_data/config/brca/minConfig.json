@@ -1,11 +1,11 @@
 {
-  "systemPrompt": "https://raw.githubusercontent.com/jeyabbalas/medical-report-information-extractor/refs/heads/main/examples/bcn_generations_pathology_data/config/brca/systemPrompt.txt",
+  "systemPrompt": "https://raw.githubusercontent.com/UK-Generations-Study/document-ocr-extractor/refs/heads/main/examples/bcn_generations_pathology_data/config/brca/systemPrompt.txt",
   "schemaFiles": [
-    "https://raw.githubusercontent.com/jeyabbalas/medical-report-information-extractor/refs/heads/main/examples/bcn_generations_pathology_data/config/brca/schemas/specimen.json",
-    "https://raw.githubusercontent.com/jeyabbalas/medical-report-information-extractor/refs/heads/main/examples/bcn_generations_pathology_data/config/brca/schemas/excision.json"
+    "https://raw.githubusercontent.com/UK-Generations-Study/document-ocr-extractor/refs/heads/main/examples/bcn_generations_pathology_data/config/brca/schemas/specimen.json",
+    "https://raw.githubusercontent.com/UK-Generations-Study/document-ocr-extractor/refs/heads/main/examples/bcn_generations_pathology_data/config/brca/schemas/excision.json"
   ],
   "jsonldContextFiles": [
-    "https://raw.githubusercontent.com/jeyabbalas/medical-report-information-extractor/refs/heads/main/examples/bcn_generations_pathology_data/config/brca/jsonldContexts/specimen.json",
-    "https://raw.githubusercontent.com/jeyabbalas/medical-report-information-extractor/refs/heads/main/examples/bcn_generations_pathology_data/config/brca/jsonldContexts/excision.json"
+    "https://raw.githubusercontent.com/UK-Generations-Study/document-ocr-extractor/refs/heads/main/examples/bcn_generations_pathology_data/config/brca/jsonldContexts/specimen.json",
+    "https://raw.githubusercontent.com/UK-Generations-Study/document-ocr-extractor/refs/heads/main/examples/bcn_generations_pathology_data/config/brca/jsonldContexts/excision.json"
   ]
 }

@@ -49,6 +49,21 @@ The app requires cross-origin isolation (COOP/COEP) for its multi-threaded OCR
 and in-browser LLM. The dev/preview servers send the headers directly; on a
 static host a service-worker shim (`public/coi-serviceworker.js`) provides them.
 
+### External dependency: OCR model weights
+
+The OCR pipeline fetches its model weights from the HuggingFace repository
+[`jeyabbalas/private-eye-models`](https://huggingface.co/jeyabbalas/private-eye-models),
+pinned to revision `f1ec7e4` (see `src/ocr/runtime/assets.ts` and
+`scripts/prepare-build.mjs`). The small layout graph is fetched at build time;
+the larger weight sidecars stream from the HuggingFace CDN on the first OCR run
+and are then cached in the browser.
+
+This repository is currently **public**, so no credentials are needed. **The
+build and runtime OCR both depend on continued read access to it.** If it were
+made private or removed, OCR would stop working — mirror the weights (e.g. into
+a repository this organization owns) and update the pinned repo/revision in the
+two files above.
+
 ## Deployment
 
 Pushing to `main` builds and deploys to GitHub Pages via

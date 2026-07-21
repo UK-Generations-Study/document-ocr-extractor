@@ -1,5 +1,5 @@
 {
-  "$id": "https://github.com/jeyabbalas/medical-report-information-extractor/tree/main/examples/connect_data/config/schemas/diagnosis.json",
+  "$id": "https://github.com/UK-Generations-Study/document-ocr-extractor/tree/main/examples/connect_data/config/schemas/diagnosis.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Cervical diagnosis schema",
   "description": "Schema for the single most severe cervical diagnosis explicitly stated by the pathologist, extracted from cervical cancer pathology reports.",
@@ -8,7 +8,7 @@
   "x-version": "1.0.0",
   "x-provenance": {
     "x-lastModified": "2026-07-01",
-    "x-repository": "https://github.com/jeyabbalas/medical-report-information-extractor",
+    "x-repository": "https://github.com/UK-Generations-Study/document-ocr-extractor",
     "x-maintainer": "Medical Report Information Extractor"
   },
   "x-primaryKey": ["fileName"],
