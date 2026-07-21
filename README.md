@@ -68,12 +68,34 @@ into a repository this organization owns and update the pinned repo/revision in
 `src/ocr/runtime/assets.ts` (and, to keep them in lockstep, the fallback
 constants in `scripts/prepare-build.mjs`).
 
+## Sample data
+
+A small set of sample reports lives in
+[`examples/bcn_generations_pathology_data/sample_reports/`](examples/bcn_generations_pathology_data/sample_reports).
+These are synthetic BBD pathology report page images (mstore-style single-page
+TIFF exports) laid out exactly like a real batch:
+
+```
+sample_reports/
+  metadata.csv                         # one row per report (TCode, yearmonth, mm, CB_DOCID, CB_PAGES)
+  BBD_Path_Reports/<yearmonth>/<mm>/<CB_DOCID>.<page>   # the page images
+```
+
+To load them in the app, click **CSV batch** in the sidebar and select the
+`sample_reports` folder — i.e. the directory that contains `metadata.csv`. The
+app reads the CSV, resolves each row's page images under `BBD_Path_Reports/`,
+and loads the reports into the queue (grouped by TCode), where OCR begins
+automatically. It's the quickest way to see the batch review workflow end to
+end. The synthetic pages were produced by `sample_reports/generate_reports.py`.
+
 ## Deployment
 
 Pushing to `main` builds and deploys to GitHub Pages via
-`.github/workflows/deploy.yml`. The Vite `base` is set to
-`/document-ocr-extractor/` to match the repository name; update it if you host
-under a different path.
+`.github/workflows/deploy.yml`. The Vite `base` is set to `/` because the site
+is served from the deployment origin's root (a private/access-controlled Pages
+site on a `*.pages.github.io` subdomain). If you host it as a public project
+site under `<owner>.github.io/document-ocr-extractor/`, set `base` back to
+`/document-ocr-extractor/`.
 
 Live: https://uk-generations-study.github.io/document-ocr-extractor/
 
