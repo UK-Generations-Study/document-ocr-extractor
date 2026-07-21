@@ -51,18 +51,22 @@ static host a service-worker shim (`public/coi-serviceworker.js`) provides them.
 
 ### External dependency: OCR model weights
 
-The OCR pipeline fetches its model weights from the HuggingFace repository
-[`jeyabbalas/private-eye-models`](https://huggingface.co/jeyabbalas/private-eye-models),
-pinned to revision `f1ec7e4` (see `src/ocr/runtime/assets.ts` and
-`scripts/prepare-build.mjs`). The small layout graph is fetched at build time;
-the larger weight sidecars stream from the HuggingFace CDN on the first OCR run
-and are then cached in the browser.
+**The build makes no network calls** — the small graph files it needs are
+vendored in `assets/` (the ~5 MB layout graph and the PP-OCR calibration map)
+and staged by `scripts/prepare-build.mjs`.
 
-This repository is currently **public**, so no credentials are needed. **The
-build and runtime OCR both depend on continued read access to it.** If it were
-made private or removed, OCR would stop working — mirror the weights (e.g. into
-a repository this organization owns) and update the pinned repo/revision in the
-two files above.
+At **runtime**, the OCR pipeline streams its large model weight sidecars
+(~130 MB) from the HuggingFace repository
+[`jeyabbalas/private-eye-models`](https://huggingface.co/jeyabbalas/private-eye-models),
+pinned to revision `f1ec7e4` (see `src/ocr/runtime/assets.ts`). They are cached
+in the browser after the first OCR run.
+
+That repository is currently **public**, so no credentials are needed.
+**In-browser OCR depends on continued read access to it.** If it were made
+private or removed, OCR would stop working in the browser — mirror the weights
+into a repository this organization owns and update the pinned repo/revision in
+`src/ocr/runtime/assets.ts` (and, to keep them in lockstep, the fallback
+constants in `scripts/prepare-build.mjs`).
 
 ## Deployment
 
@@ -84,11 +88,12 @@ parent commits:
 | OCR pipeline (Quick Read / Deep Read) | [`jeyabbalas/private-eye`](https://github.com/jeyabbalas/private-eye) | `5e989d0` |
 | OCR model weights (HuggingFace) | [`jeyabbalas/private-eye-models`](https://huggingface.co/jeyabbalas/private-eye-models) | `f1ec7e4` |
 
-The `private-eye` OCR pipeline was ported into `src/ocr/`; the one build-time
-asset it provided (`public/models/ppocr/calibration.json`) is vendored at
-`assets/ppocr/calibration.json` and staged by `scripts/prepare-build.mjs`. The
-layout model weights stream from the pinned `private-eye-models` revision at
-runtime (see `src/ocr/runtime/assets.ts`).
+The `private-eye` OCR pipeline was ported into `src/ocr/`. The small build-time
+assets it needs are vendored under `assets/` — the PP-OCR calibration map
+(`assets/ppocr/`) and the layout graph + config (`assets/layout/`) — and staged
+into `public/` by `scripts/prepare-build.mjs`, so the build is self-contained.
+The large layout weight sidecar streams from the pinned `private-eye-models`
+revision in the browser at runtime (see `src/ocr/runtime/assets.ts`).
 
 ## License
 

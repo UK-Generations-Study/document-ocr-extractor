@@ -84,9 +84,16 @@ async function fetchToFile(url, dest) {
 }
 
 async function stageLayout() {
-    // Fetch the small original graph + inference.yml, apply the patch, then
-    // vendor only the patched .onnx + yml into public/. The ~130 MB .onnx.data
-    // sidecar stays remote and streams from HF at runtime.
+    // Obtain the small (~5 MB) original layout graph + inference.yml, apply the
+    // ceil_mode patch, then vendor only the patched .onnx + yml into public/.
+    // The ~130 MB .onnx.data weight sidecar stays remote and streams from HF at
+    // runtime (per-user, cached) - it is never fetched here.
+    //
+    // Source of the graph: the copy vendored in assets/ (preferred - no network,
+    // so CI can't be rate-limited by HuggingFace, which throttles shared runner
+    // IPs with HTTP 429). Only if the vendored copy is absent do we fall back to
+    // fetching from the pinned HF revision. The SHA check in patch-layout.mjs
+    // guarantees the vendored graph is exactly that revision.
     const modelsDir = join(ROOT, 'models', LAYOUT_HF_DIR);
     const publicDir = join(ROOT, 'public/models', LAYOUT_HF_DIR);
     const patchedInPublic = join(publicDir, PATCHED_NAME);
@@ -95,21 +102,35 @@ async function stageLayout() {
         console.log('[prepare-build] layout graph already staged -> public/models/layout/doclayoutv3/');
         return;
     }
-    if (skipModels) {
-        console.warn('[prepare-build] --skip-models: layout graph not staged; Quick Read will not run');
-        return;
-    }
-    const base = `https://huggingface.co/${LAYOUT_REPO}/resolve/${LAYOUT_REV}/${LAYOUT_HF_DIR}`;
+
     const originalPath = join(modelsDir, ORIGINAL_NAME);
     const ymlPath = join(modelsDir, 'inference.yml');
-    if (!existsSync(originalPath)) {
-        console.log(`[prepare-build] fetching ${ORIGINAL_NAME} from ${LAYOUT_REPO}@${LAYOUT_REV.slice(0, 7)}...`);
-        const bytes = await fetchToFile(`${base}/${ORIGINAL_NAME}`, originalPath);
-        console.log(`[prepare-build] fetched ${(bytes / 1024).toFixed(1)} KB -> models/${LAYOUT_HF_DIR}/${ORIGINAL_NAME}`);
-    }
-    if (!existsSync(ymlPath)) {
-        const bytes = await fetchToFile(`${base}/inference.yml`, ymlPath);
-        console.log(`[prepare-build] fetched ${(bytes / 1024).toFixed(1)} KB -> models/${LAYOUT_HF_DIR}/inference.yml`);
+    const vendorDir = join(ROOT, 'assets', LAYOUT_HF_DIR);
+    const vendoredOriginal = join(vendorDir, ORIGINAL_NAME);
+    const vendoredYml = join(vendorDir, 'inference.yml');
+    const haveVendored = existsSync(vendoredOriginal) && existsSync(vendoredYml);
+
+    if (!existsSync(originalPath) || !existsSync(ymlPath)) {
+        if (haveVendored) {
+            mkdirSync(modelsDir, { recursive: true });
+            if (!existsSync(originalPath)) copyFileSync(vendoredOriginal, originalPath);
+            if (!existsSync(ymlPath)) copyFileSync(vendoredYml, ymlPath);
+            console.log(`[prepare-build] using vendored layout graph (assets/${LAYOUT_HF_DIR}/) - no network fetch`);
+        } else if (skipModels) {
+            console.warn('[prepare-build] --skip-models: layout graph not staged; Quick Read will not run');
+            return;
+        } else {
+            const base = `https://huggingface.co/${LAYOUT_REPO}/resolve/${LAYOUT_REV}/${LAYOUT_HF_DIR}`;
+            if (!existsSync(originalPath)) {
+                console.log(`[prepare-build] fetching ${ORIGINAL_NAME} from ${LAYOUT_REPO}@${LAYOUT_REV.slice(0, 7)}...`);
+                const bytes = await fetchToFile(`${base}/${ORIGINAL_NAME}`, originalPath);
+                console.log(`[prepare-build] fetched ${(bytes / 1024).toFixed(1)} KB -> models/${LAYOUT_HF_DIR}/${ORIGINAL_NAME}`);
+            }
+            if (!existsSync(ymlPath)) {
+                const bytes = await fetchToFile(`${base}/inference.yml`, ymlPath);
+                console.log(`[prepare-build] fetched ${(bytes / 1024).toFixed(1)} KB -> models/${LAYOUT_HF_DIR}/inference.yml`);
+            }
+        }
     }
     const patchedPath = ensurePatchedLayoutModel(modelsDir);
     mkdirSync(publicDir, { recursive: true });
