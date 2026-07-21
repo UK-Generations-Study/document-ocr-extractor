@@ -21,7 +21,13 @@ const coiHeaders = {
 
 export default defineConfig({
   plugins: [tailwindcss()],
-  base: '/document-ocr-extractor/',
+  // Served at the ROOT of the deployment origin. GitHub Pages with access
+  // control (private/internal repo) serves from a generated *.pages.github.io
+  // subdomain root, so the base is '/', not '/<repo>/'. If this is ever made a
+  // PUBLIC project site (served at <owner>.github.io/document-ocr-extractor/),
+  // change this back to '/document-ocr-extractor/'. The base must match the
+  // served path: src/ocr/runtime/assets.ts resolves vendored assets against it.
+  base: '/',
   build: {
     target: 'es2022',
   },
