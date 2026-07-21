@@ -27,9 +27,10 @@ npm-debug.log*
 # for the metadata-CSV ingest path.
 input_data/
 
-# On-disk reference to the private-eye OCR project.
-# Its Quick Read pipeline is ported into src/ocr/ (Phase 1); this
-# directory stays as a source-of-truth reference but is not tracked here.
+# On-disk reference to the private-eye OCR project (the OCR pipeline was
+# fused in from it - see README). The one build-time file we need,
+# public/models/ppocr/calibration.json, is vendored at assets/ppocr/;
+# this dir is otherwise unused and ignored if a local copy is present.
 private-eye/
 
 # Assets staged by scripts/prepare-build.mjs (regenerated on every build).

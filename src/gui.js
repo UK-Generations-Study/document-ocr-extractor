@@ -9,7 +9,7 @@
 import marieLogoUrl from '../assets/marie_logo.svg';
 import githubLogoUrl from '../assets/github.svg';
 
-const sourceCodeUrl = 'https://github.com/jeyabbalas/medical-report-information-extractor';
+const sourceCodeUrl = 'https://github.com/UK-Generations-Study/document-ocr-extractor';
 
 const emptyPanelSvg = `
 <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1" class="w-10 h-10 mb-2 opacity-40 mx-auto">

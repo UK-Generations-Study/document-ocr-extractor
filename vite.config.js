@@ -21,7 +21,7 @@ const coiHeaders = {
 
 export default defineConfig({
   plugins: [tailwindcss()],
-  base: '/medical-report-information-extractor/',
+  base: '/document-ocr-extractor/',
   build: {
     target: 'es2022',
   },

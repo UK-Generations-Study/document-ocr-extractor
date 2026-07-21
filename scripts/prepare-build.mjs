@@ -58,13 +58,14 @@ function stageOrt() {
 }
 
 function stagePpocrCalibration() {
-  // Small calibration.json (a few KB, checked into private-eye's public tree).
-  // Copied here so src/ocr/engines/ppocr/calibration.ts can fetch it same-origin.
-  const src = join(ROOT, 'private-eye/public/models/ppocr/calibration.json');
+  // Small PP-OCR calibration map (~18 KB), vendored into assets/ (tracked)
+  // when the OCR pipeline was fused in from private-eye. Copied here so
+  // src/ocr/engines/ppocr/calibration.ts can fetch it same-origin.
+  const src = join(ROOT, 'assets/ppocr/calibration.json');
   const dst = join(ROOT, 'public/models/ppocr/calibration.json');
   if (!existsSync(src)) {
     console.warn(
-      '[prepare-build] private-eye/public/models/ppocr/calibration.json not found (skipping - Quick Read will use defaults)',
+      '[prepare-build] assets/ppocr/calibration.json not found (skipping - Quick Read will use defaults)',
     );
     return;
   }
