@@ -27,6 +27,7 @@ import { API_PROVIDERS } from '../core/constants.js';
 import { emitAppEvent } from '../core/bus.js';
 import { setDocumentStatus } from '../core/status.js';
 import { createProvider } from '../providers/registry.js';
+import { pageOutputText } from '../deid/deidentify.js';
 import {
     allDocuments,
     getConfigRecord,
@@ -149,9 +150,11 @@ async function processDoc(docId) {
     const ocrPages = await getOcrPagesByDoc(docId);
     // Match ocrPages to their doc order using the doc.pages[].blobKey sequence.
     const byKey = new Map(ocrPages.map((r) => [r.pageBlobKey, r]));
+    // pageOutputText yields the de-identified copy when de-identification ran,
+    // so PII never reaches the LLM provider.
     const orderedText = (doc.pages || [])
         .map((p, i) => {
-            const md = byKey.get(p.blobKey)?.markdown || '';
+            const md = pageOutputText(byKey.get(p.blobKey));
             return doc.pages.length > 1 ? `--- Page ${i + 1} ---\n${md}` : md;
         })
         .join('\n\n');

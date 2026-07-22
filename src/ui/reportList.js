@@ -17,6 +17,7 @@ import { allDocuments, deleteDocument, getOcrPagesByDoc } from '../db.js';
 import { onAppEvent, emitAppEvent } from '../core/bus.js';
 import { STATUS_META, setDocumentStatus } from '../core/status.js';
 import { OCR_ONLY } from '../core/flags.js';
+import { pageOutputText } from '../deid/deidentify.js';
 import { ingestFiles } from '../ingest/ingest.js';
 import { ingestFromMetadata } from '../ingest/metadataIngest.js';
 import { combineExtractedData, combineOcrText, convertJsonToCsv } from '../results/processor.js';
@@ -355,7 +356,8 @@ async function handleExport(format) {
             const byKey = new Map(pages.map((p) => [p.pageBlobKey, p]));
             const text = (d.pages || [])
                 .map((p, i) => {
-                    const md = byKey.get(p.blobKey)?.markdown || '';
+                    // Redacted copy when de-identification ran, else raw OCR.
+                    const md = pageOutputText(byKey.get(p.blobKey));
                     return (d.pages.length > 1 ? `--- Page ${i + 1} ---\n` : '') + md;
                 })
                 .join('\n\n')

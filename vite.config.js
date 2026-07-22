@@ -19,6 +19,28 @@ const coiHeaders = {
   'Cross-Origin-Embedder-Policy': 'credentialless',
 };
 
+/**
+ * De-identification (Presidio) reverse proxy.
+ *
+ * The Presidio containers serve no CORS headers, so the browser cannot call
+ * them cross-origin. Everything goes through the same-origin '/presidio' path
+ * instead, which we forward here in dev/preview (nginx does the same job in
+ * the Docker image). /anonymize goes to the anonymizer service, everything
+ * else (/analyze, /supportedentities, /health) to the analyzer.
+ *
+ * Point these at your services with PRESIDIO_ANALYZER_URL /
+ * PRESIDIO_ANONYMIZER_URL if they aren't on the default ports.
+ */
+const analyzerTarget = process.env.PRESIDIO_ANALYZER_URL || 'http://localhost:5002';
+const anonymizerTarget = process.env.PRESIDIO_ANONYMIZER_URL || 'http://localhost:5001';
+const stripPresidio = (p) => p.replace(/^\/presidio/, '');
+// Key order matters: Vite matches by prefix, so the more specific
+// '/presidio/anonymize' must be declared before the '/presidio' catch-all.
+const presidioProxy = {
+  '/presidio/anonymize': { target: anonymizerTarget, changeOrigin: true, rewrite: stripPresidio },
+  '/presidio': { target: analyzerTarget, changeOrigin: true, rewrite: stripPresidio },
+};
+
 export default defineConfig({
   plugins: [tailwindcss()],
   // Served at the ROOT of the deployment origin. GitHub Pages with access
@@ -40,6 +62,6 @@ export default defineConfig({
   optimizeDeps: {
     exclude: ['onnxruntime-web'],
   },
-  server: { headers: coiHeaders },
-  preview: { headers: coiHeaders },
+  server: { headers: coiHeaders, proxy: presidioProxy },
+  preview: { headers: coiHeaders, proxy: presidioProxy },
 });

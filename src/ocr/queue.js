@@ -25,6 +25,7 @@ import { QuickClient } from './workers/client.ts';
 import { emitAppEvent } from '../core/bus.js';
 import { setDocumentStatus } from '../core/status.js';
 import { getSettings, REVIEW_MODES } from '../core/settings.js';
+import { deidentifyPage } from '../deid/deidentify.js';
 import { countDocLowConfLines } from './confidence.js';
 import {
     allDocuments,
@@ -186,12 +187,62 @@ async function processDocument(docId) {
             await setDocumentStatus(docId, 'ocr-failed', { lastError: pageErrors.join('; ') });
         } else {
             const ocrPages = await getOcrPagesByDoc(docId);
+            // De-identify BEFORE the document becomes reviewable. A failure
+            // here fails the document: continuing would surface (and later
+            // export) text that was supposed to be redacted.
+            let redactions = null;
+            try {
+                redactions = await deidentifyDocument(docId, ocrPages);
+            } catch (err) {
+                emit({ type: 'deid-error', docId, error: err });
+                await setDocumentStatus(docId, 'ocr-failed', {
+                    lastError: `De-identification failed: ${err?.message || err}`,
+                });
+                emit({ type: 'doc-done', docId, failed: true });
+                return;
+            }
             const lowConfLines = countDocLowConfLines(ocrPages);
-            await setDocumentStatus(docId, 'ocr-done', { lowConfLines, lastError: null });
+            await setDocumentStatus(docId, 'ocr-done', {
+                lowConfLines,
+                lastError: null,
+                ...(redactions === null ? {} : { redactions }),
+            });
             await maybeAutoConfirm(docId, lowConfLines);
         }
     }
     emit({ type: 'doc-done', docId, failed: pageErrors.length > 0 });
+}
+
+/**
+ * Run Presidio de-identification over every page of a document, storing the
+ * redacted text + findings on each ocrPages record.
+ *
+ * Returns the number of findings, or null when the feature is disabled.
+ * Throws if the service is unreachable - the caller turns that into a failed
+ * document, because quietly continuing would let un-redacted text reach the
+ * review pane and the export.
+ */
+async function deidentifyDocument(docId, ocrPages) {
+    const settings = await getSettings();
+    if (!settings.deidEnabled) return null;
+
+    emit({ type: 'deid-start', docId, pageCount: ocrPages.length });
+    let findingCount = 0;
+    for (let i = 0; i < ocrPages.length; i++) {
+        const rec = ocrPages[i];
+        const deid = await deidentifyPage(rec, {
+            base: settings.deidBaseUrl,
+            entities: settings.deidEntities,
+            scoreThreshold: settings.deidScoreThreshold,
+        });
+        findingCount += deid.findings.length;
+        // Keep the original markdown untouched alongside the redacted copy so
+        // the abstractor can verify a redaction; exports read deid.markdown.
+        await putOcrPage({ ...rec, deid });
+        emit({ type: 'deid-page', docId, pageIndex: i, pageCount: ocrPages.length });
+    }
+    emit({ type: 'deid-done', docId, findingCount });
+    return findingCount;
 }
 
 /** Apply the review-mode gate: skip the human "check text" stop when allowed. */

@@ -10,6 +10,7 @@
  */
 import { getSettings, saveSettings, REVIEW_MODES } from '../core/settings.js';
 import { OCR_ONLY } from '../core/flags.js';
+import { DEFAULT_ENTITIES, checkHealth, supportedEntities } from '../deid/presidio.js';
 import { allDocuments, getOcrPagesByDoc, putDocument } from '../db.js';
 import { emitAppEvent } from '../core/bus.js';
 import { countDocLowConfLines } from '../ocr/confidence.js';
@@ -113,6 +114,54 @@ export async function openSettingsPanel(deps) {
                 </div>
             </section>
 
+            <!-- De-identification -->
+            <section>
+                <h3 class="text-xs font-semibold uppercase tracking-wide text-gray-500">De-identification</h3>
+                <label class="mt-2 flex items-start gap-2 text-sm text-gray-800 cursor-pointer">
+                    <input id="sp-deid" type="checkbox" ${settings.deidEnabled ? 'checked' : ''}
+                           class="mt-0.5 h-4 w-4 rounded text-green-600 focus:ring-green-500"/>
+                    <span>
+                        <span class="block font-medium">Remove personal identifiers with Presidio</span>
+                        <span class="block text-xs text-gray-600 mt-0.5">
+                            After OCR, each recognized text region is analyzed and any detected
+                            identifiers are replaced with <code>[REDACTED]</code> and blacked out on
+                            the page image. Exports (and the LLM, when extraction is enabled) only
+                            ever see the redacted text.
+                        </span>
+                    </span>
+                </label>
+                <div id="sp-deid-opts" class="mt-3 space-y-3 ${settings.deidEnabled ? '' : 'hidden'}">
+                    <div>
+                        <label for="sp-deid-url" class="block text-xs font-medium text-gray-700">Service path</label>
+                        <div class="mt-1 flex gap-2">
+                            <input id="sp-deid-url" type="text" value="${escapeAttr(settings.deidBaseUrl)}"
+                                   class="flex-1 rounded-md border border-gray-300 px-2.5 py-1.5 text-sm text-gray-900 focus:border-green-600 focus:outline-none focus:ring-1 focus:ring-green-600"/>
+                            <button id="sp-deid-test" type="button"
+                                    class="shrink-0 rounded-md border border-gray-300 bg-white px-2.5 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50">
+                                Test
+                            </button>
+                        </div>
+                        <p id="sp-deid-status" class="mt-1 text-xs text-gray-500">
+                            Same-origin path proxied to the Presidio analyzer and anonymizer
+                            containers. The services cannot be called directly from the browser
+                            (no CORS headers), so this must stay a same-origin path.
+                        </p>
+                    </div>
+                    <div>
+                        <div class="flex items-center justify-between">
+                            <span class="text-xs font-medium text-gray-700">Identifier types</span>
+                            <button id="sp-deid-load" type="button" class="text-[11px] text-green-800 hover:underline">
+                                Load all from service
+                            </button>
+                        </div>
+                        <div id="sp-deid-entities" class="mt-1.5 flex flex-wrap gap-1"></div>
+                        <p class="mt-1 text-xs text-gray-500">
+                            Unselecting everything detects every type the service supports.
+                        </p>
+                    </div>
+                </div>
+            </section>
+
             <!-- View -->
             <section>
                 <h3 class="text-xs font-semibold uppercase tracking-wide text-gray-500">View</h3>
@@ -170,6 +219,87 @@ export async function openSettingsPanel(deps) {
 
     mount.querySelector('#sp-sync').addEventListener('change', (e) => {
         setSyncEnabled(e.target.checked);
+    });
+
+    wireDeidControls(mount, settings);
+}
+
+// ---------- de-identification controls ----------
+
+function wireDeidControls(mount, settings) {
+    const toggle = mount.querySelector('#sp-deid');
+    const opts = mount.querySelector('#sp-deid-opts');
+    const urlInput = mount.querySelector('#sp-deid-url');
+    const statusEl = mount.querySelector('#sp-deid-status');
+    const entitiesWrap = mount.querySelector('#sp-deid-entities');
+
+    // Start from the configured selection; "Load all" widens the choices to
+    // whatever the running analyzer build supports.
+    let known = [...new Set([...DEFAULT_ENTITIES, ...(settings.deidEntities || [])])].sort();
+    let selected = new Set(settings.deidEntities || []);
+
+    const paintEntities = () => {
+        entitiesWrap.innerHTML = known.map((e) => {
+            const on = selected.has(e);
+            return `<button type="button" data-entity="${escapeAttr(e)}"
+                class="rounded-full px-2 py-0.5 text-[11px] font-medium ring-1 ring-inset ${
+                    on ? 'bg-green-800 text-white ring-green-800' : 'bg-white text-gray-600 ring-gray-300 hover:bg-gray-100'}">
+                ${escapeHtml(e)}</button>`;
+        }).join('');
+        entitiesWrap.querySelectorAll('button[data-entity]').forEach((btn) => {
+            btn.addEventListener('click', async () => {
+                const e = btn.dataset.entity;
+                if (selected.has(e)) selected.delete(e); else selected.add(e);
+                paintEntities();
+                await saveSettings({ deidEntities: [...selected] });
+            });
+        });
+    };
+    paintEntities();
+
+    const setStatus = (msg, tone) => {
+        statusEl.textContent = msg;
+        statusEl.className = `mt-1 text-xs ${
+            tone === 'ok' ? 'text-green-700' : tone === 'error' ? 'text-red-700' : 'text-gray-500'}`;
+    };
+
+    toggle.addEventListener('change', async () => {
+        opts.classList.toggle('hidden', !toggle.checked);
+        await saveSettings({ deidEnabled: toggle.checked });
+        showToast(
+            toggle.checked
+                ? 'De-identification on. It runs after OCR; documents fail if the service is unreachable.'
+                : 'De-identification off. New documents keep their original text.',
+            { tone: toggle.checked ? 'success' : 'info' },
+        );
+    });
+
+    urlInput.addEventListener('change', async () => {
+        await saveSettings({ deidBaseUrl: urlInput.value.trim() || '/presidio' });
+        setStatus('Service path saved. Use Test to check it.', null);
+    });
+
+    mount.querySelector('#sp-deid-test').addEventListener('click', async () => {
+        setStatus('Contacting the Presidio services…', null);
+        try {
+            await checkHealth({ base: urlInput.value.trim() || '/presidio' });
+            setStatus('Analyzer and anonymizer both reachable.', 'ok');
+        } catch (err) {
+            setStatus(err?.message || 'Could not reach the service.', 'error');
+        }
+    });
+
+    mount.querySelector('#sp-deid-load').addEventListener('click', async () => {
+        setStatus('Fetching supported identifier types…', null);
+        try {
+            const all = await supportedEntities({ base: urlInput.value.trim() || '/presidio' });
+            if (!all.length) throw new Error('The service returned no entity types.');
+            known = [...new Set([...known, ...all])].sort();
+            paintEntities();
+            setStatus(`Loaded ${all.length} identifier types from the service.`, 'ok');
+        } catch (err) {
+            setStatus(err?.message || 'Could not load entity types.', 'error');
+        }
     });
 }
 

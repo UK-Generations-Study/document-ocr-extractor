@@ -17,6 +17,7 @@
  */
 import { getConfigRecord, saveConfigRecord } from '../db.js';
 import { emitAppEvent } from './bus.js';
+import { DEFAULT_ENTITIES } from '../deid/presidio.js';
 
 export const REVIEW_MODES = {
     MANUAL: 'manual',
@@ -28,6 +29,17 @@ const DEFAULTS = {
     reviewMode: REVIEW_MODES.MANUAL,
     syncScroll: true,
     lowConfThreshold: 0.6,
+
+    // De-identification (Presidio). Off by default: it requires the Presidio
+    // services to be reachable, and enabling it silently would let documents
+    // fail OCR when they aren't. See src/deid/.
+    deidEnabled: false,
+    /** Same-origin base path a reverse proxy forwards to the Presidio services. */
+    deidBaseUrl: '/presidio',
+    /** Entity types to detect; empty array means "everything the server supports". */
+    deidEntities: DEFAULT_ENTITIES,
+    /** Minimum analyzer confidence for a span to count as PII. */
+    deidScoreThreshold: 0.5,
 };
 
 let cache = null;

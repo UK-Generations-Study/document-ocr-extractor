@@ -68,6 +68,55 @@ into a repository this organization owns and update the pinned repo/revision in
 `src/ocr/runtime/assets.ts` (and, to keep them in lockstep, the fallback
 constants in `scripts/prepare-build.mjs`).
 
+## De-identification (optional)
+
+The app can strip personal identifiers out of the OCR text using
+[Presidio](https://github.com/data-privacy-stack/presidio). It uses the
+**analyzer and anonymizer services only** — not the image redactor: each text
+region the OCR pipeline already recognized is analyzed on its own, so every
+detected identifier comes back attached to a bounding box. Those boxes are
+blacked out over the page image, and the matching text is replaced with
+`[REDACTED]`.
+
+Run the two services:
+
+```bash
+docker run -d --name presidio-analyzer   -p 5002:3000 mcr.microsoft.com/presidio-analyzer:latest
+docker run -d --name presidio-anonymizer -p 5001:3000 mcr.microsoft.com/presidio-anonymizer:latest
+```
+
+Then enable it in **Settings → De-identification** and press **Test**.
+
+The services send no CORS headers, so the browser cannot call them directly.
+Everything goes through the same-origin `/presidio` path, which the Vite dev
+server proxies (see `vite.config.js`; override with `PRESIDIO_ANALYZER_URL` /
+`PRESIDIO_ANONYMIZER_URL`). This also keeps the page cross-origin-isolated,
+which the OCR engines require.
+
+How it behaves:
+
+- Runs **automatically after OCR** on every page, before the document becomes
+  reviewable.
+- **The original text is kept.** The review pane shows the redacted version
+  (editable, so you can fix a bad redaction) with a **Show original** toggle
+  that reveals the un-redacted text read-only. Exports — and the LLM, when the
+  extraction stage is enabled — only ever receive the redacted text.
+- **A failure fails the document.** If the services are unreachable the report
+  is marked failed rather than quietly proceeding, so text that was meant to be
+  redacted can never reach the review pane or an export.
+- Identifier types are configurable; the default set is tuned for UK pathology
+  reports (`PERSON`, `DATE_TIME`, `LOCATION`, `PHONE_NUMBER`, `EMAIL_ADDRESS`,
+  `UK_NHS`, `MEDICAL_LICENSE`). **Load all from service** offers every type the
+  running analyzer supports.
+
+Box precision comes from the OCR uncertainty layer: where per-character
+geometry is available the rectangle is narrowed to the exact characters,
+otherwise it falls back to the line box and then the block box.
+
+> The air-gapped Docker image does not yet bundle Presidio — enabling
+> de-identification there needs the two services running alongside it and
+> nginx proxying `/presidio`.
+
 ## Sample data
 
 A small set of sample reports lives in
