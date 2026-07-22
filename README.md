@@ -88,6 +88,55 @@ and loads the reports into the queue (grouped by TCode), where OCR begins
 automatically. It's the quickest way to see the batch review workflow end to
 end. The synthetic pages were produced by `sample_reports/generate_reports.py`.
 
+## Air-gapped Docker deployment
+
+The `Dockerfile` builds a self-contained image that serves the app with every
+model weight baked in, so the running container needs **no network access**.
+It is an OCR appliance: ingest, OCR, review and export, with **no LLM field
+extraction** (nothing to reach on an isolated network) — the setup wizard is
+skipped and Export emits the reviewed OCR text instead of extracted fields.
+
+All computation still happens in the operator's **browser**; the container is
+only a static file server. The host therefore needs a WebGPU-capable browser
+(recent Chrome/Edge).
+
+Build on a networked machine (it downloads ~1.64 GB of weights), then move it:
+
+```bash
+docker build -t document-ocr-extractor:latest .
+docker save document-ocr-extractor:latest | gzip > doe.tar.gz
+```
+
+Copy `doe.tar.gz` to the air-gapped host, then:
+
+```bash
+docker load < doe.tar.gz
+docker run -d --name doe -p 8080:80 document-ocr-extractor:latest
+```
+
+Open **http://localhost:8080** on that machine.
+
+Two constraints worth knowing:
+
+- **Use `localhost`.** The OCR engines need `SharedArrayBuffer`, which browsers
+  only expose on a cross-origin-isolated *and* secure page. `http://localhost`
+  counts as secure; reaching the container over plain HTTP from another machine
+  does not, and OCR will refuse to start. Serving to other hosts requires HTTPS
+  with a trusted certificate.
+- **Image size.** ~1.8 GB by default, including the Deep Read VLM. Build with
+  `--build-arg FETCH_DEEP=` to omit it and ship ~270 MB of models instead
+  (Quick Read only, roughly a 450 MB image).
+
+To vendor the weights outside Docker (e.g. for an offline `npm run preview`):
+
+```bash
+npm run fetch-models -- --deep        # into public/models/
+VITE_OFFLINE_MODELS=true VITE_OCR_ONLY=true npm run build
+```
+
+Both flags are off by default, so an ordinary `npm run build` still produces
+the normal online app with LLM extraction (see `src/core/flags.js`).
+
 ## Deployment
 
 Pushing to `main` builds and deploys to GitHub Pages via

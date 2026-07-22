@@ -12,7 +12,12 @@
  * weights from HuggingFace. No user document, image, or OCR text ever leaves
  * the browser. Works identically on the main thread and inside Web Workers
  * (`self.location.origin` is the page origin in both).
+ *
+ * In OFFLINE_MODELS builds (the Docker image) even that traffic is gone: every
+ * weight is vendored into public/models/ and served same-origin, so the app
+ * runs fully air-gapped.
  */
+import { OFFLINE_MODELS } from '../../core/flags.js';
 
 const BASE = import.meta.env.BASE_URL; // e.g. '/private-eye/'
 const ORIGIN = self.location.origin;
@@ -47,8 +52,12 @@ const hf = (src: Source, file: string): string =>
 
 /** models/-relative path -> HuggingFace CDN URL. Anything not listed here is
  *  resolved same-origin via vendored() (the patched layout graph, the .yml
- *  sidecars that travel with the patched graph, and calibration.json). */
-const MODEL_CDN: Record<string, string> = {
+ *  sidecars that travel with the patched graph, and calibration.json).
+ *
+ *  Empty in OFFLINE_MODELS builds, so every lookup falls through to vendored()
+ *  and the CDN URLs are dead-code-eliminated from the bundle entirely - a
+ *  build that still contains them is not a true offline build. */
+const MODEL_CDN: Record<string, string> = OFFLINE_MODELS ? {} : {
   // Layout: the patched graph is vendored; its 130 MB external weights are remote.
   'layout/doclayoutv3/PP-DocLayoutV3.onnx.data': hf(SOURCES.layout, 'PP-DocLayoutV3.onnx.data'),
   // PP-OCRv6 detector + recognizer (unified multilingual rec), keyed by tier.
@@ -66,15 +75,21 @@ const MODEL_CDN: Record<string, string> = {
   'bakeoff/glm-ocr-q8/mmproj-GLM-OCR-Q8_0.gguf': hf(SOURCES.glmOcr, 'mmproj-GLM-OCR-Q8_0.gguf'),
 };
 
-/** Resolve a models/-relative path to its runtime URL (HF CDN or same-origin). */
+/** Resolve a models/-relative path to its runtime URL (HF CDN or same-origin).
+ *
+ *  In OFFLINE_MODELS builds every weight is served from this origin - the
+ *  Docker image vendors them into public/models/ via scripts/fetch-models.mjs -
+ *  so the app makes no cross-origin requests at all (air-gapped deployment). */
 export function modelUrl(rel: string): string {
   const key = rel.replace(/^\//, '');
+  if (OFFLINE_MODELS) return vendored('models/' + key);
   return MODEL_CDN[key] ?? vendored('models/' + key);
 }
 
-/** Direct accessors for the Deep Read GGUF pair (used by run-g-live). */
-export const GLM_OCR_MODEL_URL = MODEL_CDN['bakeoff/glm-ocr-q8/GLM-OCR-Q8_0.gguf']!;
-export const GLM_OCR_MMPROJ_URL = MODEL_CDN['bakeoff/glm-ocr-q8/mmproj-GLM-OCR-Q8_0.gguf']!;
+/** Direct accessors for the Deep Read GGUF pair (used by run-g-live).
+ *  Routed through modelUrl() so OFFLINE_MODELS builds serve them same-origin. */
+export const GLM_OCR_MODEL_URL = modelUrl('bakeoff/glm-ocr-q8/GLM-OCR-Q8_0.gguf');
+export const GLM_OCR_MMPROJ_URL = modelUrl('bakeoff/glm-ocr-q8/mmproj-GLM-OCR-Q8_0.gguf');
 
 /** Vendored onnxruntime-web WASM directory (for ort.env.wasm.wasmPaths). */
 export const ORT_WASM_DIR = vendored('ort/');

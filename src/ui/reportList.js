@@ -13,12 +13,13 @@
  * confirm; we move the selection to the next visible document in the same
  * review stage so the abstractor lands on their next unit of work.
  */
-import { allDocuments, deleteDocument } from '../db.js';
+import { allDocuments, deleteDocument, getOcrPagesByDoc } from '../db.js';
 import { onAppEvent, emitAppEvent } from '../core/bus.js';
 import { STATUS_META, setDocumentStatus } from '../core/status.js';
+import { OCR_ONLY } from '../core/flags.js';
 import { ingestFiles } from '../ingest/ingest.js';
 import { ingestFromMetadata } from '../ingest/metadataIngest.js';
-import { combineExtractedData, convertJsonToCsv } from '../results/processor.js';
+import { combineExtractedData, combineOcrText, convertJsonToCsv } from '../results/processor.js';
 import { confirmOcr, confirmExtraction, retryDoc } from './reviewFlow.js';
 import { showToast, confirmDialog, infoDialog } from './toast.js';
 
@@ -26,15 +27,29 @@ const MOUNT_ID = 'report-list';
 
 const ACCEPTED_EXT = '.pdf,.png,.jpg,.jpeg,.webp,.gif,.bmp,.tif,.tiff';
 
-/** Filter chips: id -> { label, statuses (null = all) }. */
-const FILTERS = [
-    { id: 'all',          label: 'All',          statuses: null },
-    { id: 'working',      label: 'Working',      statuses: ['queued', 'ocr-running', 'ocr-confirmed', 'extraction-running'] },
-    { id: 'check-text',   label: 'Check text',   statuses: ['ocr-done'] },
-    { id: 'check-fields', label: 'Check fields', statuses: ['extraction-done'] },
-    { id: 'done',         label: 'Done',         statuses: ['confirmed', 'exported'] },
-    { id: 'failed',       label: 'Failed',       statuses: ['ocr-failed', 'extraction-failed'] },
-];
+/** Documents eligible for export: those whose reviewed output is final. */
+const EXPORTABLE = OCR_ONLY
+    ? ['ocr-confirmed', 'exported']
+    : ['confirmed', 'exported'];
+
+/** Filter chips: id -> { label, statuses (null = all) }. In OCR-only builds
+ *  the extraction stages don't exist, so 'ocr-confirmed' is the Done bucket. */
+const FILTERS = OCR_ONLY
+    ? [
+        { id: 'all',        label: 'All',        statuses: null },
+        { id: 'working',    label: 'Working',    statuses: ['queued', 'ocr-running'] },
+        { id: 'check-text', label: 'Check text', statuses: ['ocr-done'] },
+        { id: 'done',       label: 'Done',       statuses: ['ocr-confirmed', 'exported'] },
+        { id: 'failed',     label: 'Failed',     statuses: ['ocr-failed'] },
+    ]
+    : [
+        { id: 'all',          label: 'All',          statuses: null },
+        { id: 'working',      label: 'Working',      statuses: ['queued', 'ocr-running', 'ocr-confirmed', 'extraction-running'] },
+        { id: 'check-text',   label: 'Check text',   statuses: ['ocr-done'] },
+        { id: 'check-fields', label: 'Check fields', statuses: ['extraction-done'] },
+        { id: 'done',         label: 'Done',         statuses: ['confirmed', 'exported'] },
+        { id: 'failed',       label: 'Failed',       statuses: ['ocr-failed', 'extraction-failed'] },
+    ];
 
 let selectionRef = null;   // { getSelected(), setSelected(id), subscribe(fn) }
 let currentDocs = [];      // last-fetched list, in creation order
@@ -322,27 +337,51 @@ function refreshExportAffordance() {
     const btn = document.getElementById('rl-export');
     const count = document.getElementById('rl-export-count');
     if (!btn || !count) return;
-    const eligible = currentDocs.filter((d) => d.status === 'confirmed' || d.status === 'exported').length;
+    const eligible = currentDocs.filter((d) => EXPORTABLE.includes(d.status)).length;
     btn.disabled = eligible === 0;
     count.textContent = eligible > 0 ? ` ${eligible}` : '';
 }
 
 async function handleExport(format) {
-    const eligible = currentDocs.filter((d) => d.status === 'confirmed' || d.status === 'exported');
+    const eligible = currentDocs.filter((d) => EXPORTABLE.includes(d.status));
     if (!eligible.length) return;
-    const rows = combineExtractedData(eligible);
+    let rows;
+    if (OCR_ONLY) {
+        // No extracted fields exist; export the reviewed OCR text instead,
+        // reading each document's pages in stored order.
+        const textByDoc = new Map();
+        for (const d of eligible) {
+            const pages = await getOcrPagesByDoc(d.id);
+            const byKey = new Map(pages.map((p) => [p.pageBlobKey, p]));
+            const text = (d.pages || [])
+                .map((p, i) => {
+                    const md = byKey.get(p.blobKey)?.markdown || '';
+                    return (d.pages.length > 1 ? `--- Page ${i + 1} ---\n` : '') + md;
+                })
+                .join('\n\n')
+                .trim();
+            textByDoc.set(d.id, text);
+        }
+        rows = combineOcrText(eligible, textByDoc);
+    } else {
+        rows = combineExtractedData(eligible);
+    }
     const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const name = OCR_ONLY ? 'ocr-text' : 'extractions';
     if (format === 'csv') {
         const csv = convertJsonToCsv(rows);
-        triggerDownload(`extractions-${stamp}.csv`, 'text/csv', csv);
+        triggerDownload(`${name}-${stamp}.csv`, 'text/csv', csv);
     } else {
         const json = JSON.stringify(rows, null, 2);
-        triggerDownload(`extractions-${stamp}.json`, 'application/json', json);
+        triggerDownload(`${name}-${stamp}.json`, 'application/json', json);
     }
     // Mark each exported doc so the badge reflects the terminal state.
     // Via setDocumentStatus so the bus announces it (status strip, etc.).
+    // The pre-export terminal status differs by build: 'confirmed' normally,
+    // 'ocr-confirmed' when there is no extraction stage.
+    const preExport = OCR_ONLY ? 'ocr-confirmed' : 'confirmed';
     for (const d of eligible) {
-        if (d.status === 'confirmed') {
+        if (d.status === preExport) {
             await setDocumentStatus(d.id, 'exported', { exportedAt: Date.now() });
         }
     }

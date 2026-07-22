@@ -43,6 +43,37 @@ export function combineExtractedData(reports) {
 }
 
 /**
+ * Combine reviewed OCR text into a flat array, for OCR-only builds where
+ * there are no extracted fields to export.
+ *
+ * Same identifier columns as combineExtractedData (TCode / CB_DOCID /
+ * yearmonth / fileName) so the two outputs join the same way, plus the page
+ * count and the confirmed text of the whole report.
+ *
+ * @param {Object[]} reports - Report records to export
+ * @param {Map<string, string>} textByDoc - docId -> concatenated OCR markdown
+ * @returns {Object[]} - Combined rows, identifiers first
+ */
+export function combineOcrText(reports, textByDoc) {
+    const anyMetadata = reports.some((r) => r.metadata);
+    return reports.map((r) => {
+        const identifiers = anyMetadata
+            ? {
+                TCode: r.metadata?.tcode ?? null,
+                CB_DOCID: r.metadata?.docid ?? null,
+                yearmonth: r.metadata?.yearmonth ?? null,
+            }
+            : {};
+        return {
+            ...identifiers,
+            fileName: r.name,
+            pages: r.pages?.length ?? 0,
+            text: textByDoc.get(r.id) ?? '',
+        };
+    });
+}
+
+/**
  * Convert JSON data to CSV format
  * @param {Object[]} data - Array of objects to convert to CSV
  * @returns {string} - CSV formatted string

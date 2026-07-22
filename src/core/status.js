@@ -15,6 +15,7 @@
  */
 import { getDocument, putDocument } from '../db.js';
 import { emitAppEvent } from './bus.js';
+import { OCR_ONLY } from './flags.js';
 
 /** Presentation metadata per status, in the abstractor's vocabulary. */
 export const STATUS_META = {
@@ -29,6 +30,16 @@ export const STATUS_META = {
     'ocr-failed':         { label: 'OCR failed',    dot: 'bg-red-500',    text: 'text-red-700',   badge: 'bg-red-50 text-red-700 ring-red-300' },
     'extraction-failed':  { label: 'Extraction failed', dot: 'bg-red-500', text: 'text-red-700',  badge: 'bg-red-50 text-red-700 ring-red-300' },
 };
+
+// In OCR-only builds there is no extraction stage, so confirming the text IS
+// the finish line - relabel it accordingly (green "Done" rather than the
+// in-progress indigo "Text OK" that hands off to extraction).
+if (OCR_ONLY) {
+    STATUS_META['ocr-confirmed'] = {
+        label: 'Done', dot: 'bg-green-600', text: 'text-green-700',
+        badge: 'bg-green-50 text-green-700 ring-green-300',
+    };
+}
 
 /** Statuses whose work pane is the OCR view. */
 export const OCR_PANE_STATUSES = new Set(['queued', 'ocr-running', 'ocr-done', 'ocr-failed']);

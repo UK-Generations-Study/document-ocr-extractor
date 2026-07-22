@@ -1,0 +1,21 @@
+# Keep the build context small and force everything generated to be rebuilt
+# inside the image (models are fetched, public/ is staged by prepare-build).
+.git
+.github
+.claude
+node_modules
+dist
+
+# Regenerated during the image build.
+public/ort
+public/models
+public/wllama-patched
+public/schemas
+models
+
+# User-provided pathology data - must never enter an image.
+input_data
+
+*.log
+npm-debug.log*
+.DS_Store

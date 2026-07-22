@@ -9,6 +9,7 @@
  * longer means re-walking schema + credentials.
  */
 import { getSettings, saveSettings, REVIEW_MODES } from '../core/settings.js';
+import { OCR_ONLY } from '../core/flags.js';
 import { allDocuments, getOcrPagesByDoc, putDocument } from '../db.js';
 import { emitAppEvent } from '../core/bus.js';
 import { countDocLowConfLines } from '../ocr/confidence.js';
@@ -26,12 +27,16 @@ const MODE_COPY = [
     {
         id: REVIEW_MODES.FLAGGED,
         title: 'Review flagged text only',
-        desc: 'Reports whose OCR looks clean skip the text check and go straight to extraction. Only pages with low-confidence lines stop for review.',
+        desc: OCR_ONLY
+            ? 'Reports whose OCR looks clean are confirmed automatically. Only pages with low-confidence lines stop for review.'
+            : 'Reports whose OCR looks clean skip the text check and go straight to extraction. Only pages with low-confidence lines stop for review.',
     },
     {
         id: REVIEW_MODES.AUTO,
         title: 'Fully automatic',
-        desc: 'No text check at all - every report flows from OCR into extraction. Best for large, clean batches.',
+        desc: OCR_ONLY
+            ? 'No text check at all - every report is confirmed as soon as OCR finishes. Best for large, clean batches.'
+            : 'No text check at all - every report flows from OCR into extraction. Best for large, clean batches.',
     },
 ];
 
@@ -61,7 +66,8 @@ export async function openSettingsPanel(deps) {
             </button>
         </div>
         <div class="p-5 space-y-6 overflow-y-auto">
-            <!-- Configuration summary -->
+            <!-- Configuration summary (LLM-only; hidden in OCR-only builds) -->
+            ${OCR_ONLY ? '' : `
             <section>
                 <h3 class="text-xs font-semibold uppercase tracking-wide text-gray-500">Configuration</h3>
                 <dl class="mt-2 divide-y divide-gray-100 border border-gray-200 rounded-md">
@@ -69,14 +75,15 @@ export async function openSettingsPanel(deps) {
                     ${configRowHtml('LLM provider', providerLabel, 2)}
                     ${configRowHtml('Model', status.model || '—', 3)}
                 </dl>
-            </section>
+            </section>`}
 
             <!-- Processing mode -->
             <section>
                 <h3 class="text-xs font-semibold uppercase tracking-wide text-gray-500">Processing</h3>
                 <p class="mt-1 text-xs text-gray-500">
-                    How much of the batch runs without stopping for you. Extracted fields always wait for
-                    your confirmation - singly, or via "Confirm all" in the sidebar.
+                    How much of the batch runs without stopping for you.${OCR_ONLY ? '' : `
+                    Extracted fields always wait for your confirmation - singly, or via
+                    "Confirm all" in the sidebar.`}
                 </p>
                 <div class="mt-2 space-y-2">
                     ${MODE_COPY.map((m) => `

@@ -27,6 +27,7 @@ import {
 } from './src/db.js';
 import { onAppEvent } from './src/core/bus.js';
 import { getSettings } from './src/core/settings.js';
+import { OCR_ONLY } from './src/core/flags.js';
 import { EXTRACTION_PANE_STATUSES } from './src/core/status.js';
 import { openWizard } from './src/ui/wizard.js';
 import { openSettingsPanel } from './src/ui/settingsPanel.js';
@@ -375,7 +376,8 @@ async function routeWorkPane(docId) {
     }
     const doc = await getDocument(docId);
     if (!doc) return;
-    if (EXTRACTION_PANE_STATUSES.has(doc.status) && paneOverrides.get(docId) !== 'ocr') {
+    // OCR-only builds have no extraction view; the OCR pane owns every status.
+    if (!OCR_ONLY && EXTRACTION_PANE_STATUSES.has(doc.status) && paneOverrides.get(docId) !== 'ocr') {
         releaseOcrPane();
         await showExtractionFor(docId);
     } else {
@@ -401,7 +403,9 @@ function wireBus() {
         if (ev.type === 'status') {
             paneOverrides.delete(ev.docId); // status flow resumes pane control
             if (ev.status === 'queued') enqueueDocument(ev.docId);
-            else if (ev.status === 'ocr-confirmed') enqueueExtraction(ev.docId);
+            // In OCR-only builds 'ocr-confirmed' is terminal - never hand off
+            // to the extraction queue (there is no LLM to call).
+            else if (ev.status === 'ocr-confirmed' && !OCR_ONLY) enqueueExtraction(ev.docId);
         }
 
         // "View text" / "View extracted fields" pane toggle.
@@ -479,7 +483,7 @@ async function mountWorkspace() {
     // then enqueue whatever is actionable. After this, routing is event-driven.
     await recoverStuckDocuments();
     await primeQueueFromDb();
-    await primeExtractionFromDb();
+    if (!OCR_ONLY) await primeExtractionFromDb();
 
     // Do the initial route once everything is wired.
     await routeWorkPane(selection.getSelected());
@@ -490,6 +494,11 @@ async function init() {
     initTooltip();
     bindGearIcon();
     await mountWorkspace();
+
+    // The wizard exists solely to configure the extraction LLM and its schema,
+    // so OCR-only builds skip it - there is nothing to set up, and its blocking
+    // overlay would make the app unusable with no reachable LLM.
+    if (OCR_ONLY) return;
 
     const status = await readSetupStatus();
     const setupComplete = status.schemaOk && status.credsOk && status.modelOk;

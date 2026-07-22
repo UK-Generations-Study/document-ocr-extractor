@@ -8,6 +8,7 @@
     "predev": "node scripts/prepare-build.mjs",
     "dev": "vite",
     "build": "vite build",
+    "fetch-models": "node scripts/fetch-models.mjs",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit"
   },
