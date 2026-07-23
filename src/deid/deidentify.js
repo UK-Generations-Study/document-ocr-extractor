@@ -1,93 +1,76 @@
 /**
- * De-identify one OCR'd page with Presidio, scoped to the bounding boxes the
- * OCR pipeline already recognized.
+ * De-identify one OCR'd page with Presidio, scoped to the regions the OCR
+ * pipeline already recognized.
  *
- * We deliberately do NOT use Presidio's image redactor. Instead each assembled
- * document Block (heading / paragraph / listItem / kv / table - all of which
- * carry a `box`) is analyzed on its own, so every PII span comes back attached
- * to a known region of the page. That gives us two outputs:
+ * We deliberately do NOT use Presidio's image redactor. The OCR pipeline hands
+ * us a DocModel: a list of Blocks (heading / paragraph / listItem / kv / table),
+ * each a recognized region of the page, plus the Markdown it serialized them
+ * into. De-identification sits BETWEEN those two: every text field of every
+ * block is analyzed and anonymized, then the page Markdown is re-rendered from
+ * the redacted blocks with the pipeline's own renderMarkdown().
  *
- *   - findings[]  entity type + score + a PIXEL BOX, used to draw redaction
- *                 rectangles over the page image in the review pane;
- *   - markdown    the page text with every finding replaced by the placeholder,
- *                 which is what gets exported (and what the LLM sees, when the
- *                 extraction stage is enabled).
+ * That ordering matters. Re-rendering means the redacted Markdown is
+ * structurally identical to the original - same headings, same tables, same
+ * spacing - and that no text is ever pattern-matched or replaced after the
+ * fact. A finding only ever affects the exact field it was found in.
  *
- * Box precision: a Block's own box bounds the whole paragraph/table, which is
- * coarser than the entity itself. Where the uncertainty layer supplies raw OCR
- * lines with per-character boxes we narrow the rectangle to the exact
- * characters; otherwise we fall back to the line box, then the block box.
- *
- * The redacted markdown is produced by substring replacement rather than by
- * re-assembling blocks, because the markdown is built inside the OCR worker
- * and its layout (headings, tables, key/value runs) isn't reproducible here.
- * Replacement is global per distinct PII string, so a name appearing twice is
- * redacted in both places - over-redaction being the safe direction.
+ * Only the text is redacted. Page images are left untouched: nothing but text
+ * is exported, so the text is the only thing that needs de-identifying.
  */
 import { analyze, anonymize, REDACTION_PLACEHOLDER } from './presidio.js';
+import { renderMarkdown } from '../ocr/structure/blocks.ts';
 
-/** Analyze at most this many blocks concurrently. */
+/** Analyze at most this many distinct field texts concurrently. */
 const CONCURRENCY = 4;
 
-/** The analyzable text of one Block, or '' for blocks that carry none. */
-function blockText(block) {
-    if (!block || typeof block !== 'object') return '';
+/**
+ * Every de-identifiable text field of a block, as {path, text} pairs. `path`
+ * tells applyRedactions where to write the redacted value back.
+ *
+ * Fields are analyzed individually rather than as one joined string per block,
+ * so each result maps back to exactly the field it came from with no offset
+ * arithmetic and no risk of an entity straddling two fields.
+ */
+function blockFields(block) {
+    if (!block || typeof block !== 'object') return [];
     switch (block.kind) {
         case 'heading':
         case 'paragraph':
-            return block.text || '';
+            return [{ path: ['text'], text: block.text || '' }];
         case 'listItem':
-            return [block.lead, block.text].filter(Boolean).join(' ');
+            return [
+                ...(block.lead ? [{ path: ['lead'], text: block.lead }] : []),
+                { path: ['text'], text: block.text || '' },
+            ];
         case 'kv':
-            // Analyze as "Label: value" so the label gives the recognizers
-            // context (e.g. "Patient: J Smith" reads far more clearly as a
-            // PERSON than a bare "J Smith").
-            return [block.label, block.value].filter(Boolean).join(': ');
+            return [
+                { path: ['label'], text: block.label || '' },
+                { path: ['value'], text: block.value || '' },
+            ];
         case 'table':
-            return (block.cells || []).map((row) => (row || []).join('\t')).join('\n');
+            return (block.cells || []).flatMap((row, r) =>
+                (row || []).map((cell, c) => ({ path: ['cells', r, c], text: cell || '' })),
+            );
         default:
-            return ''; // 'rule' and anything unknown
+            return []; // 'rule' and anything unknown carry no text
     }
 }
 
-const boxesOverlap = (a, b) =>
-    !!a && !!b && a.x0 < b.x1 && b.x0 < a.x1 && a.y0 < b.y1 && b.y0 < a.y1;
-
-function unionBox(boxes) {
-    const valid = boxes.filter(Boolean);
-    if (!valid.length) return null;
-    return valid.reduce((acc, b) => ({
-        x0: Math.min(acc.x0, b.x0),
-        y0: Math.min(acc.y0, b.y0),
-        x1: Math.max(acc.x1, b.x1),
-        y1: Math.max(acc.y1, b.y1),
-    }));
-}
-
-/**
- * Best pixel box for a PII string that was found inside `block`.
- * Prefers per-character geometry from the raw OCR lines; degrades to the
- * line box, then the block box.
- */
-function locateSpan(piiText, block, lines) {
-    const needle = piiText.trim();
-    if (needle) {
-        for (const line of lines) {
-            if (!boxesOverlap(line.box, block.box)) continue;
-            const idx = (line.text || '').indexOf(needle);
-            if (idx < 0) continue;
-            const chars = line.chars;
-            if (Array.isArray(chars) && chars.length >= idx + needle.length) {
-                const tight = unionBox(chars.slice(idx, idx + needle.length).map((c) => c.box));
-                if (tight) return tight;
-            }
-            if (line.box) return line.box;
-        }
+/** Structured clone of a block with one field replaced. */
+function withField(block, path, value) {
+    const next = { ...block };
+    if (path[0] === 'cells') {
+        const [, r, c] = path;
+        next.cells = (block.cells || []).map((row, i) =>
+            i === r ? (row || []).map((cell, j) => (j === c ? value : cell)) : row,
+        );
+    } else {
+        next[path[0]] = value;
     }
-    return block.box || null;
+    return next;
 }
 
-/** Run `tasks` (thunks) with at most `limit` in flight, preserving order. */
+/** Run `fn` over `items` with at most `limit` in flight, preserving order. */
 async function mapWithConcurrency(items, limit, fn) {
     const results = new Array(items.length);
     let next = 0;
@@ -102,70 +85,77 @@ async function mapWithConcurrency(items, limit, fn) {
 }
 
 /**
+ * Analyze then anonymize one piece of text.
+ * @returns {Promise<{redacted: string, spans: Array}>}
+ */
+async function redactText(text, { base, entities, scoreThreshold, placeholder, signal }) {
+    const spans = await analyze(text, { base, entities, scoreThreshold, signal });
+    if (!spans.length) return { redacted: text, spans };
+    const { text: redacted } = await anonymize(text, spans, { base, placeholder, signal });
+    return { redacted, spans };
+}
+
+/**
  * De-identify a single stored OCR page.
  *
- * @param {object} ocrPage  a record from the ocrPages store (markdown, blocks, uncertainty)
+ * @param {object} ocrPage  a record from the ocrPages store (markdown, blocks, width, height)
  * @param {object} opts     { base, entities, scoreThreshold, placeholder, signal }
  * @returns {Promise<{markdown: string, findings: Array, entities: string[], at: number}>}
- *   `markdown` is the redacted page text; `findings` carry entity type, score
- *   and box (no raw PII - the original text is retained separately).
+ *   `markdown` is the re-rendered redacted page text. `findings` record the
+ *   entity type and score of each detection - never the matched text itself.
  */
 export async function deidentifyPage(ocrPage, opts = {}) {
     const { base, entities, scoreThreshold, placeholder = REDACTION_PLACEHOLDER, signal } = opts;
+    const redactOpts = { base, entities, scoreThreshold, placeholder, signal };
     const blocks = Array.isArray(ocrPage?.blocks) ? ocrPage.blocks : [];
-    const lines = Array.isArray(ocrPage?.uncertainty?.lines) ? ocrPage.uncertainty.lines : [];
     const originalMarkdown = ocrPage?.markdown || '';
 
-    // Analyze each recognized region independently, so every span is already
-    // attributed to one bounding box.
-    const analyzable = blocks
-        .map((block, index) => ({ block, index, text: blockText(block) }))
-        .filter((b) => b.text.trim().length > 0);
+    // Safety net: a page with no block structure (an older record, or a
+    // pipeline that returned none) must still be de-identified rather than
+    // silently exporting its raw text. Redact the whole page text as one unit.
+    if (!blocks.length) {
+        if (!originalMarkdown.trim()) {
+            return { markdown: originalMarkdown, findings: [], entities: entities ? [...entities] : [], at: Date.now() };
+        }
+        const { redacted, spans } = await redactText(originalMarkdown, redactOpts);
+        return {
+            markdown: redacted,
+            findings: spans.map((s) => ({ entityType: s.entity_type, score: s.score, blockIndex: -1 })),
+            entities: entities && entities.length ? [...entities] : [],
+            at: Date.now(),
+        };
+    }
 
-    // Each region: analyzer finds the spans, anonymizer performs the actual
-    // substitution on that region's text. Both services are used as intended;
-    // no image redaction is involved.
-    const perBlock = await mapWithConcurrency(analyzable, CONCURRENCY, async ({ block, index, text }) => {
-        const spans = await analyze(text, { base, entities, scoreThreshold, signal });
-        if (!spans.length) return { block, index, text, spans, items: [] };
-        const { items } = await anonymize(text, spans, { base, placeholder, signal });
-        return { block, index, text, spans, items };
+    // Flatten to the set of fields needing analysis, then de-duplicate by text
+    // so a value repeated across cells costs one round-trip, not many.
+    const fields = blocks.flatMap((block, blockIndex) =>
+        blockFields(block)
+            .filter((f) => f.text.trim().length > 0)
+            .map((f) => ({ ...f, blockIndex })),
+    );
+    const uniqueTexts = [...new Set(fields.map((f) => f.text))];
+    const byText = new Map();
+    await mapWithConcurrency(uniqueTexts, CONCURRENCY, async (text) => {
+        byText.set(text, await redactText(text, redactOpts));
     });
 
+    // Rebuild the blocks with redacted field values, and record what was found.
+    let redactedBlocks = blocks;
     const findings = [];
-    /** original PII string -> whatever the anonymizer replaced it with. */
-    const replacements = new Map();
-    for (const { block, index, text, spans, items } of perBlock) {
-        // Pair spans with the anonymizer's items positionally: replacements
-        // preserve order, so both sorted ascending line up one-to-one. This
-        // means we adopt the service's actual output rather than assuming the
-        // placeholder - so a different operator would still work.
-        const spansAsc = [...spans].sort((a, b) => a.start - b.start);
-        const itemsAsc = [...items].sort((a, b) => a.start - b.start);
-        spansAsc.forEach((span, i) => {
-            const piiText = text.slice(span.start, span.end).trim();
-            if (!piiText) return;
-            replacements.set(piiText, itemsAsc[i]?.text ?? placeholder);
-            findings.push({
-                entityType: span.entity_type,
-                score: span.score,
-                blockIndex: index,
-                box: locateSpan(piiText, block, lines),
-            });
-        });
-    }
-
-    // Propagate those substitutions through the assembled markdown, which the
-    // anonymizer never sees in its laid-out form (the OCR worker builds it).
-    let markdown = originalMarkdown;
-    if (replacements.size) {
-        // Longest first so a shorter PII string can't partially clobber a
-        // longer one that contains it.
-        const ordered = [...replacements.keys()].sort((a, b) => b.length - a.length);
-        for (const pii of ordered) {
-            markdown = markdown.split(pii).join(replacements.get(pii));
+    for (const { blockIndex, path, text } of fields) {
+        const result = byText.get(text);
+        if (!result || !result.spans.length) continue;
+        redactedBlocks = redactedBlocks.map((b, i) => (i === blockIndex ? withField(b, path, result.redacted) : b));
+        for (const span of result.spans) {
+            findings.push({ entityType: span.entity_type, score: span.score, blockIndex });
         }
     }
+
+    // Re-render with the pipeline's own serializer, so the redacted page is
+    // laid out exactly as the original was.
+    const markdown = findings.length
+        ? renderMarkdown({ blocks: redactedBlocks, width: ocrPage.width, height: ocrPage.height })
+        : originalMarkdown;
 
     return {
         markdown,
@@ -186,13 +176,10 @@ export function pageOutputText(ocrPage) {
 }
 
 /**
- * Ask the anonymizer to redact a standalone string. Used for the Settings
- * "test connection" round-trip and available for callers that want the
- * service (rather than local substitution) to do the substituting.
+ * Ask Presidio to redact a standalone string. Used by the Settings
+ * "test connection" round-trip.
  */
 export async function anonymizeText(text, opts = {}) {
-    const { base, entities, scoreThreshold, placeholder, signal } = opts;
-    const spans = await analyze(text, { base, entities, scoreThreshold, signal });
-    const { text: redacted } = await anonymize(text, spans, { base, placeholder, signal });
+    const { redacted } = await redactText(text, { placeholder: REDACTION_PLACEHOLDER, ...opts });
     return redacted;
 }

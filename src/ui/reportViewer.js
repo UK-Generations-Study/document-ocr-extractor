@@ -126,7 +126,6 @@ async function renderFor(docId, { force } = {}) {
          class="block w-full h-auto rounded-b"
          style="aspect-ratio: ${page.width} / ${page.height};" />
     ${overlaysHtml(page, ocr)}
-    ${redactionsHtml(page, ocr)}
 </div>`;
         pagesRoot.appendChild(wrap);
     }
@@ -147,30 +146,6 @@ const OVERLAY_STYLES = {
     'coverage-gap': 'bg-sky-300/25 hover:bg-sky-300/40',
     'disagreement': 'bg-red-300/25 hover:bg-red-300/40',
 };
-
-/** Solid boxes marking PII that de-identification redacted out of the text.
- *  Deliberately opaque: the text is gone from the export, and covering it on
- *  screen keeps the review pane free of the identifiers too. */
-function redactionsHtml(page, ocr) {
-    const findings = ocr?.deid?.findings;
-    if (!findings?.length) return '';
-    const W = ocr.width || page.width;
-    const H = ocr.height || page.height;
-    if (!W || !H) return '';
-    return findings
-        .filter((f) => f.box && f.box.x1 > f.box.x0 && f.box.y1 > f.box.y0)
-        .map((f) => {
-            const left = (f.box.x0 / W) * 100;
-            const top = (f.box.y0 / H) * 100;
-            const width = ((f.box.x1 - f.box.x0) / W) * 100;
-            const height = ((f.box.y1 - f.box.y0) / H) * 100;
-            const pct = typeof f.score === 'number' ? ` · ${Math.round(f.score * 100)}%` : '';
-            return `<div class="absolute rounded-[2px] bg-gray-900/90 hover:bg-gray-900/60 transition-colors"
-                title="${escapeAttr(`Redacted ${f.entityType}${pct}`)}"
-                style="left:${left.toFixed(2)}%;top:${top.toFixed(2)}%;width:${width.toFixed(2)}%;height:${height.toFixed(2)}%;"></div>`;
-        })
-        .join('');
-}
 
 /** Boxes over the page image marking every OCR region needing attention. */
 function overlaysHtml(page, ocr) {

@@ -72,11 +72,18 @@ constants in `scripts/prepare-build.mjs`).
 
 The app can strip personal identifiers out of the OCR text using
 [Presidio](https://github.com/data-privacy-stack/presidio). It uses the
-**analyzer and anonymizer services only** — not the image redactor: each text
-region the OCR pipeline already recognized is analyzed on its own, so every
-detected identifier comes back attached to a bounding box. Those boxes are
-blacked out over the page image, and the matching text is replaced with
-`[REDACTED]`.
+**analyzer and anonymizer services only** — not the image redactor.
+
+De-identification sits between the two halves of the OCR pipeline. That
+pipeline produces a list of blocks (heading / paragraph / key-value / table),
+each a recognized region of the page, and then serializes them to Markdown.
+Every text field of every block is analyzed and anonymized, and the page
+Markdown is then **re-rendered from the redacted blocks** using the pipeline's
+own serializer. So a finding only ever affects the field it was found in, and
+the redacted page keeps the exact structure of the original.
+
+Only the text is redacted — page images are left untouched, since the text is
+the only thing that gets exported.
 
 Run the two services:
 
@@ -108,10 +115,14 @@ How it behaves:
   reports (`PERSON`, `DATE_TIME`, `LOCATION`, `PHONE_NUMBER`, `EMAIL_ADDRESS`,
   `UK_NHS`, `MEDICAL_LICENSE`). **Load all from service** offers every type the
   running analyzer supports.
+- A page that arrives with no block structure still gets de-identified: its
+  whole text is redacted as one unit rather than passed through raw.
 
-Box precision comes from the OCR uncertainty layer: where per-character
-geometry is available the rectangle is narrowed to the exact characters,
-otherwise it falls back to the line box and then the block box.
+Recall is Presidio's, not ours: it decides what counts as an identifier and
+where each span starts and ends. In practice that means a span can be narrower
+than you'd expect — `Dr A Patel` is typically returned as just `Patel`, leaving
+`Dr A` in place. Review the redactions on real reports and widen the entity
+selection if needed.
 
 > The air-gapped Docker image does not yet bundle Presidio — enabling
 > de-identification there needs the two services running alongside it and
