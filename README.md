@@ -140,8 +140,13 @@ How it behaves:
   Select any text and confirm the **Redact** button to remove something the
   analyzer missed. **Reset** returns the page to what Presidio proposed.
 - The two tabs have distinct jobs while de-identification is on: **Redact** is
-  the review surface, **Edit** is the plain-text editor. Editing re-checks the
-  page for identifiers, since the previous spans no longer line up.
+  the review surface, **Edit** is the plain-text editor.
+- **Automatic detection runs once**, after OCR, and is never repeated on its
+  own — re-running it would resurrect redactions you dismissed and discard the
+  ones you added. Editing the text therefore re-anchors the redactions you
+  already have onto the new text rather than re-analyzing it. If a redaction's
+  own text is what changed it cannot be relocated, so it is dropped and you are
+  told how many, rather than one quietly disappearing.
 - **Nothing redacted is stored.** The redacted text is derived on demand from
   the stored candidate spans, so it always reflects your current settings -
   including for documents processed weeks ago.

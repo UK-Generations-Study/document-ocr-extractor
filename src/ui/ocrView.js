@@ -26,14 +26,13 @@ import TurndownService from 'turndown';
 import { getDocument, getOcrPagesByDoc, putOcrPage } from '../db.js';
 import { onAppEvent } from '../core/bus.js';
 import { setDocumentStatus } from '../core/status.js';
-import { getSettings } from '../core/settings.js';
 import { attentionRegions } from '../ocr/confidence.js';
 import {
     addManualRedaction,
     dismissRange,
     hasOverrides,
     isCurrentSchema,
-    reanalyzePageText,
+    reanchorAfterEdit,
     redactionSummary,
     resetOverrides,
     restoreRange,
@@ -477,19 +476,19 @@ function pageSectionEl(doc, pageIndex, page, ocr) {
         const nextText = ta.value;
         if (nextText === initial) return;
         if (deid) {
-            // The stored spans were measured against the old text, so they no
-            // longer apply. Re-analyze the edited page as a single unit; manual
-            // decisions are dropped because their anchors are gone too.
-            const settings = await getSettings();
-            try {
-                ocr.deid = await reanalyzePageText(nextText, { base: settings.deidBaseUrl });
-            } catch (err) {
-                console.error('[deid] re-analysis after edit failed', err);
-                showToast(`Could not re-check the edited text for identifiers: ${err?.message || err}`,
-                    { tone: 'error', duration: 8000 });
-                return; // leave the text unsaved rather than store un-analyzed text
+            // Automatic detection ran once, after OCR, and is not repeated:
+            // re-running it would resurrect dismissed spans and drop manual
+            // ones. The existing redactions are re-anchored onto the edited
+            // text instead - see reanchorAfterEdit.
+            const { deid: next, lost } = reanchorAfterEdit(deid, nextText);
+            ocr.deid = next;
+            await putOcrPage({ ...baseRecord(), markdown: nextText, source: 'edit', deid: next });
+            if (lost) {
+                showToast(
+                    `${lost} redaction${lost === 1 ? '' : 's'} could not be re-applied after your edit - that text has changed. Check the page and redact by hand if needed.`,
+                    { tone: 'error', duration: 9000 },
+                );
             }
-            await putOcrPage({ ...baseRecord(), markdown: nextText, source: 'edit', deid: ocr.deid });
             refreshCard();
             return;
         }

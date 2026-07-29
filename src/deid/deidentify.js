@@ -178,19 +178,87 @@ export async function deidentifyPage(ocrPage, opts = {}) {
     };
 }
 
-/** Re-analyze a whole page as a single unit, preserving nothing. Used after a
- *  manual text edit, where the stored per-field offsets no longer apply. */
-export async function reanalyzePageText(markdown, opts = {}) {
-    const { base, signal } = opts;
-    const text = markdown || '';
-    const spans = text.trim()
-        ? normalizeSpans(await analyze(text, { base, scoreThreshold: CANDIDATE_SCORE_FLOOR, signal }))
-        : [];
+/**
+ * Carry a page's redactions across a manual text edit.
+ *
+ * Automatic detection is a ONE-TIME proposal: it runs after OCR and never
+ * again on its own. Re-analyzing after an edit would resurrect spans the user
+ * dismissed and discard the ones they added, so instead we re-anchor what is
+ * already there - no Presidio call involved.
+ *
+ * Offsets cannot survive an edit, so each span is relocated by its TEXT. The
+ * edit also invalidates the block structure the per-field units were built
+ * from (the editor works on the whole page's Markdown), so everything
+ * collapses into a single page-level unit over the new text.
+ *
+ * A span whose text no longer appears - because that is precisely what was
+ * edited - cannot be relocated and is dropped; `lost` reports how many, so the
+ * caller can say so rather than let a redaction vanish silently.
+ *
+ * @returns {{deid: object, lost: number}}
+ */
+export function reanchorAfterEdit(deid, newText) {
+    const text = newText || '';
+    const key = unitKey(-1, PAGE_UNIT_PATH);
+    const empty = { schema: 2, at: deid?.at || Date.now(), units: [], overrides: { off: [], on: [] } };
+    if (!isCurrentSchema(deid)) return { deid: empty, lost: 0 };
+    if (!text.trim()) return { deid: empty, lost: 0 };
+
+    const spans = [];
+    const off = [];
+    let lost = 0;
+    for (const unit of deid.units || []) {
+        const unitK = unitKey(unit.blockIndex, unit.path);
+        const dismissedIds = new Set(
+            (deid.overrides?.off || []).filter((o) => o.key === unitK).map(spanId),
+        );
+        for (const s of unit.spans || []) {
+            const spanText = unit.text.slice(s.start, s.end);
+            const found = occurrencesOf(text, spanText);
+            if (!found.length) { lost++; continue; }
+            // Every occurrence is taken: after an edit we can no longer tell
+            // which one the analyzer meant, and redacting them all is the safe
+            // direction.
+            const wasDismissed = dismissedIds.has(spanId(s));
+            for (const at of found) {
+                spans.push({ ...at, entityType: s.entityType, score: s.score });
+                if (wasDismissed) off.push({ key, start: at.start, end: at.end });
+            }
+        }
+    }
+
+    const seen = new Set();
+    const unique = spans
+        .filter((s) => {
+            const id = `${s.start}:${s.end}:${s.entityType}`;
+            if (seen.has(id)) return false;
+            seen.add(id);
+            return true;
+        })
+        .sort((a, b) => a.start - b.start || a.end - b.end);
+
+    const seenOff = new Set();
+    const uniqueOff = off.filter((o) => {
+        const id = spanId(o);
+        if (seenOff.has(id)) return false;
+        seenOff.add(id);
+        return true;
+    });
+
+    // Manual redactions are text-anchored already; only their unit changes.
+    const seenOn = new Set();
+    const on = (deid.overrides?.on || [])
+        .filter((o) => o.text && !seenOn.has(o.text) && seenOn.add(o.text) !== undefined)
+        .map((o) => ({ key, text: o.text }));
+
     return {
-        schema: 2,
-        at: Date.now(),
-        units: text.trim() ? [{ blockIndex: -1, path: PAGE_UNIT_PATH, text, spans }] : [],
-        overrides: { off: [], on: [] },
+        deid: {
+            schema: 2,
+            at: deid.at,
+            units: [{ blockIndex: -1, path: PAGE_UNIT_PATH, text, spans: unique }],
+            overrides: { off: uniqueOff, on },
+        },
+        lost,
     };
 }
 
