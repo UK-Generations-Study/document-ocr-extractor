@@ -130,17 +130,31 @@ How it behaves:
 
 - Runs **automatically after OCR** on every page, before the document becomes
   reviewable.
-- **The original text is kept.** The review pane shows the redacted version
-  (editable, so you can fix a bad redaction) with a **Show original** toggle
-  that reveals the un-redacted text read-only. Exports — and the LLM, when the
-  extraction stage is enabled — only ever receive the redacted text.
+- **The review pane shows the original text under a translucent veil**, so you
+  can read what is about to be removed and judge whether it is right. Exports —
+  and the LLM, when the extraction stage is enabled — receive that text with
+  every veiled span replaced by `[REDACTED]`. (No extra exposure: the
+  un-redacted page image is already on screen beside it.)
+- **Redactions are editable.** Click a veil to keep the text; it drops to a
+  dashed outline so the decision stays visible, and clicking again restores it.
+  Select any text and confirm the **Redact** button to remove something the
+  analyzer missed. **Reset** returns the page to what Presidio proposed.
+- The two tabs have distinct jobs while de-identification is on: **Redact** is
+  the review surface, **Edit** is the plain-text editor. Editing re-checks the
+  page for identifiers, since the previous spans no longer line up.
+- **Nothing redacted is stored.** The redacted text is derived on demand from
+  the stored candidate spans, so it always reflects your current settings -
+  including for documents processed weeks ago.
 - **A failure fails the document.** If the services are unreachable the report
   is marked failed rather than quietly proceeding, so text that was meant to be
   redacted can never reach the review pane or an export.
-- Identifier types are configurable; the default set is tuned for UK pathology
-  reports (`PERSON`, `DATE_TIME`, `LOCATION`, `PHONE_NUMBER`, `EMAIL_ADDRESS`,
-  `UK_NHS`, `UK_POSTCODE`, `MEDICAL_LICENSE`). Each can be switched off, and
-  **Load all from service** offers every type the running analyzer supports.
+- Identifier types and the detection-confidence threshold are configurable, and
+  both apply **live** to reports you have already processed - analysis records
+  every candidate span, so changing them re-filters stored data rather than
+  re-running Presidio. The default set is tuned for UK pathology reports
+  (`PERSON`, `DATE_TIME`, `LOCATION`, `PHONE_NUMBER`, `EMAIL_ADDRESS`,
+  `UK_NHS`, `UK_POSTCODE`, `MEDICAL_LICENSE`); **Load all from service** offers
+  every type the running analyzer supports.
 - A page that arrives with no block structure still gets de-identified: its
   whole text is redacted as one unit rather than passed through raw.
 

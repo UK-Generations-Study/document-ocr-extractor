@@ -190,9 +190,8 @@ async function processDocument(docId) {
             // De-identify BEFORE the document becomes reviewable. A failure
             // here fails the document: continuing would surface (and later
             // export) text that was supposed to be redacted.
-            let redactions = null;
             try {
-                redactions = await deidentifyDocument(docId, ocrPages);
+                await deidentifyDocument(docId, ocrPages);
             } catch (err) {
                 emit({ type: 'deid-error', docId, error: err });
                 await setDocumentStatus(docId, 'ocr-failed', {
@@ -202,11 +201,10 @@ async function processDocument(docId) {
                 return;
             }
             const lowConfLines = countDocLowConfLines(ocrPages);
-            await setDocumentStatus(docId, 'ocr-done', {
-                lowConfLines,
-                lastError: null,
-                ...(redactions === null ? {} : { redactions }),
-            });
+            // No redaction count is stored: which spans are redacted depends on
+            // the current entity selection and score threshold, so any stored
+            // tally would go stale the moment those change.
+            await setDocumentStatus(docId, 'ocr-done', { lowConfLines, lastError: null });
             await maybeAutoConfirm(docId, lowConfLines);
         }
     }
@@ -227,22 +225,20 @@ async function deidentifyDocument(docId, ocrPages) {
     if (!settings.deidEnabled) return null;
 
     emit({ type: 'deid-start', docId, pageCount: ocrPages.length });
-    let findingCount = 0;
+    let spanCount = 0;
     for (let i = 0; i < ocrPages.length; i++) {
         const rec = ocrPages[i];
-        const deid = await deidentifyPage(rec, {
-            base: settings.deidBaseUrl,
-            entities: settings.deidEntities,
-            scoreThreshold: settings.deidScoreThreshold,
-        });
-        findingCount += deid.findings.length;
-        // Keep the original markdown untouched alongside the redacted copy so
-        // the abstractor can verify a redaction; exports read deid.markdown.
+        // No entity/threshold filter here: analysis records every candidate so
+        // the user's selection can be applied later as a live filter.
+        const deid = await deidentifyPage(rec, { base: settings.deidBaseUrl });
+        spanCount += deid.units.reduce((n, u) => n + u.spans.length, 0);
+        // The original text stays untouched alongside the evidence; the
+        // redacted copy is derived on demand (see pageOutputText).
         await putOcrPage({ ...rec, deid });
         emit({ type: 'deid-page', docId, pageIndex: i, pageCount: ocrPages.length });
     }
-    emit({ type: 'deid-done', docId, findingCount });
-    return findingCount;
+    emit({ type: 'deid-done', docId, spanCount });
+    return spanCount;
 }
 
 /** Apply the review-mode gate: skip the human "check text" stop when allowed. */

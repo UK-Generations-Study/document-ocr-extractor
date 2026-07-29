@@ -26,9 +26,22 @@ import TurndownService from 'turndown';
 import { getDocument, getOcrPagesByDoc, putOcrPage } from '../db.js';
 import { onAppEvent } from '../core/bus.js';
 import { setDocumentStatus } from '../core/status.js';
+import { getSettings } from '../core/settings.js';
 import { attentionRegions } from '../ocr/confidence.js';
+import {
+    addManualRedaction,
+    dismissRange,
+    hasOverrides,
+    isCurrentSchema,
+    reanalyzePageText,
+    redactionSummary,
+    resetOverrides,
+    restoreRange,
+    unitKey,
+} from '../deid/deidentify.js';
+import { decorateMarks, markPageText } from '../deid/marks.js';
 import { confirmOcr } from './reviewFlow.js';
-import { confirmDialog } from './toast.js';
+import { confirmDialog, showToast } from './toast.js';
 import { paneTabsHtml, wirePaneTabs } from './paneTabs.js';
 import { cancelCurrentDeep, enqueueDeep } from '../ocr/deepQueue.js';
 
@@ -59,6 +72,13 @@ export function initOcrView() {
             if (['doc-done', 'status', 'doc-start', 'page-done', 'page-start', 'load-progress'].includes(ev.type)) {
                 requestRender();
             }
+            return;
+        }
+        // Entity selection / score threshold changed: which spans are redacted
+        // is derived from settings, so a redraw is all that's needed - no
+        // re-analysis, which is what makes those controls feel instant.
+        if (ev.type === 'settings-changed') {
+            requestRender();
             return;
         }
         if (ev.source === 'deep') {
@@ -157,6 +177,7 @@ async function renderFor(docId, { force } = {}) {
     <div id="ov-pages" class="space-y-4"></div>
 </div>`;
 
+    hideRedactButton();
     const pagesRoot = mount.querySelector('#ov-pages');
     for (let i = 0; i < pages.length; i++) {
         const page = pages[i];
@@ -331,24 +352,34 @@ function pageSectionEl(doc, pageIndex, page, ocr) {
             ? `<span class="ml-2 inline-flex items-center rounded bg-gray-100 text-gray-700 ring-1 ring-inset ring-gray-300 px-1.5 py-0.5 text-[10px]">edited</span>`
             : '';
 
-    // When de-identification has run, the redacted copy is what we show and
-    // what gets exported; the original is kept and viewable behind a toggle.
-    // Editing therefore targets the redacted copy, so a correction never
-    // rewrites the original text (and vice versa).
-    const deid = ocr?.deid || null;
+    // With de-identification active the rendered view becomes the REDACTION
+    // surface: it shows the original text with a translucent veil over every
+    // span that will be redacted on export, so the abstractor can read what is
+    // being removed and correct it. Editing moves to the Raw tab, which keeps
+    // character offsets and free-text editing from fighting each other.
+    const deid = isCurrentSchema(ocr?.deid) ? ocr.deid : null;
     const originalText = ocr?.markdown ?? '';
-    let showOriginal = false;
-    const currentText = () => (deid && !showOriginal ? (deid.markdown ?? '') : originalText);
 
+    const summary = deid ? redactionSummary(ocr) : {};
+    const redacted = Object.values(summary).reduce((a, b) => a + b, 0);
+    const summaryText = Object.entries(summary).map(([t, n]) => `${n} ${t}`).join(' · ');
     const deidBadge = deid
         ? `<span class="ml-2 inline-flex items-center rounded bg-gray-900 text-gray-50 px-1.5 py-0.5 text-[10px]"
-                 title="Detected by Presidio and replaced in the exported text">${deid.findings.length} redacted</span>`
+                 title="${escapeAttr(redacted ? `${summaryText} — replaced with [REDACTED] on export` : 'Nothing detected on this page')}">${redacted} redacted</span>`
+        : '';
+    const resetBtn = deid && hasOverrides(deid)
+        ? `<button type="button" class="ov-deid-reset px-2 py-0.5 text-[11px] font-medium rounded ring-1 ring-gray-200 text-gray-600 hover:bg-gray-50"
+                   title="Discard your redaction changes on this page and go back to what was detected automatically">Reset</button>`
         : '';
 
     const readonly = ['ocr-confirmed', 'extraction-running', 'extraction-done', 'confirmed', 'exported'].includes(doc.status);
-    const initial = currentText();
+    // Rendered view: marked-up original when redacting, plain text otherwise.
+    const marked = deid ? markPageText(ocr) : { markdown: originalText, marks: [] };
+    const initial = originalText;
     const placeholder = ocr ? '' : 'Waiting for OCR&hellip;';
-    const renderedHtml = initial ? micromark(initial, { extensions: [gfm()], htmlExtensions: [gfmHtml()] }) : '';
+    const renderedHtml = marked.markdown
+        ? micromark(marked.markdown, { extensions: [gfm()], htmlExtensions: [gfmHtml()] })
+        : '';
 
     // The body shares the page image's aspect ratio so this card's height
     // matches the viewer's page card exactly; longer text scrolls inside.
@@ -356,17 +387,18 @@ function pageSectionEl(doc, pageIndex, page, ocr) {
 <div class="h-8 flex items-center justify-between px-3 border-b border-gray-100 text-xs text-gray-600">
     <div>Page ${pageIndex + 1}${sourceBadge}${lowConfBadge}${deidBadge}</div>
     <div class="flex items-center gap-2">
-        ${deid ? `<button type="button" class="ov-orig px-2 py-0.5 text-[11px] font-medium rounded ring-1 ring-gray-200 text-gray-600 hover:bg-gray-50"
-            title="Reveal the un-redacted OCR text for this page (read-only)">Show original</button>` : ''}
+        ${resetBtn}
         <div class="ov-toggle inline-flex rounded-md ring-1 ring-gray-200 overflow-hidden" role="group">
-            <button type="button" data-mode="rendered" class="ov-mode ov-mode-rendered px-2 py-0.5 text-[11px] font-medium text-gray-700 bg-gray-100">Rendered</button>
-            <button type="button" data-mode="raw" class="ov-mode ov-mode-raw px-2 py-0.5 text-[11px] font-medium text-gray-500 hover:bg-gray-50">Raw</button>
+            <button type="button" data-mode="rendered" class="ov-mode ov-mode-rendered px-2 py-0.5 text-[11px] font-medium text-gray-700 bg-gray-100"
+                    title="${deid ? 'Review and adjust redactions' : 'Formatted view'}">${deid ? 'Redact' : 'Rendered'}</button>
+            <button type="button" data-mode="raw" class="ov-mode ov-mode-raw px-2 py-0.5 text-[11px] font-medium text-gray-500 hover:bg-gray-50"
+                    title="${deid ? 'Edit the OCR text' : 'Plain markdown'}">${deid ? 'Edit' : 'Raw'}</button>
         </div>
     </div>
 </div>
 <div class="ov-body overflow-y-auto" style="aspect-ratio: ${page.width} / ${page.height};">
     <div class="ov-rendered prose prose-sm max-w-none p-4 text-sm leading-relaxed focus:outline-none focus:bg-green-50/30"
-         ${readonly ? '' : 'contenteditable="true" spellcheck="false"'}
+         ${readonly || deid ? '' : 'contenteditable="true" spellcheck="false"'}
          style="--tw-prose-headings: #111827;">${renderedHtml || `<p class="text-gray-400 italic">${placeholder || 'No OCR text yet.'}</p>`}</div>
     <textarea
         data-page-key="${escapeAttr(page.blobKey)}"
@@ -400,74 +432,140 @@ function pageSectionEl(doc, pageIndex, page, ocr) {
         ? micromark(text, { extensions: [gfm()], htmlExtensions: [gfmHtml()] })
         : `<p class="text-gray-400 italic">No OCR text yet.</p>`);
 
-    /**
-     * Write an edit back to the right place: the redacted copy when that's
-     * what's on screen, the raw OCR text otherwise. Editing is disabled while
-     * the original is revealed, so this is never ambiguous.
-     */
-    const persist = async (nextText) => {
-        const baseRecord = {
-            pageBlobKey: page.blobKey,
-            docId: doc.id,
-            blocks: ocr?.blocks || [],
-            uncertainty: ocr?.uncertainty || null,
-            width: ocr?.width ?? page.width,
-            height: ocr?.height ?? page.height,
-            stageMs: ocr?.stageMs || {},
-            totalMs: ocr?.totalMs || 0,
-            updatedAt: Date.now(),
-        };
-        if (deid) {
-            // Correcting a redaction: keep the original untouched.
-            deid.markdown = nextText;
-            await putOcrPage({ ...baseRecord, markdown: originalText, source: ocr?.source || 'quick', deid });
-        } else {
-            await putOcrPage({ ...baseRecord, markdown: nextText, source: 'edit' });
-        }
+    // Turn the sentinels micromark passed through into veils / outlines.
+    if (deid) decorateMarks(rendered, marked.marks);
+
+    const baseRecord = () => ({
+        pageBlobKey: page.blobKey,
+        docId: doc.id,
+        blocks: ocr?.blocks || [],
+        uncertainty: ocr?.uncertainty || null,
+        width: ocr?.width ?? page.width,
+        height: ocr?.height ?? page.height,
+        stageMs: ocr?.stageMs || {},
+        totalMs: ocr?.totalMs || 0,
+        updatedAt: Date.now(),
+    });
+
+    /** Rebuild just this card in place, so a redaction change doesn't reset
+     *  the scroll position of the whole pane. */
+    const refreshCard = () => {
+        wrap.replaceWith(pageSectionEl(doc, pageIndex, page, ocr));
     };
 
-    const editable = () => !readonly && !showOriginal;
+    /** Persist the page's redaction decisions and redraw. */
+    const saveDeid = async () => {
+        ocr.deid = deid;
+        await putOcrPage({ ...baseRecord(), markdown: originalText, source: ocr?.source || 'quick', deid });
+        refreshCard();
+    };
 
-    // Rendered pane: on blur, convert the (possibly-edited) HTML back to
-    // markdown, mirror it into the raw textarea, and persist.
-    rendered.addEventListener('blur', async () => {
-        if (!editable()) return;
-        const nextMd = turndown.turndown(rendered.innerHTML).trim();
-        if (nextMd === (rawTa.value || '').trim()) return;
-        rawTa.value = nextMd;
-        await persist(nextMd);
-    });
-    // Persist edits on blur so we don't hammer IDB on every keystroke.
+    // Rendered pane, no de-identification: unchanged editable behaviour.
+    if (!deid && !readonly) {
+        rendered.addEventListener('blur', async () => {
+            const nextMd = turndown.turndown(rendered.innerHTML).trim();
+            if (nextMd === (rawTa.value || '').trim()) return;
+            rawTa.value = nextMd;
+            await putOcrPage({ ...baseRecord(), markdown: nextMd, source: 'edit' });
+        });
+    }
+
+    // Raw pane is the text editor in both modes. Persist on blur so we don't
+    // hammer IndexedDB on every keystroke.
     ta.addEventListener('blur', async () => {
-        if (!editable()) return;
+        if (readonly) return;
         const nextText = ta.value;
-        // Only write if the user actually changed something.
-        if (nextText === currentText()) return;
-        await persist(nextText);
-        // Keep the rendered view in sync with the edit so switching modes
-        // shows current content.
+        if (nextText === initial) return;
+        if (deid) {
+            // The stored spans were measured against the old text, so they no
+            // longer apply. Re-analyze the edited page as a single unit; manual
+            // decisions are dropped because their anchors are gone too.
+            const settings = await getSettings();
+            try {
+                ocr.deid = await reanalyzePageText(nextText, { base: settings.deidBaseUrl });
+            } catch (err) {
+                console.error('[deid] re-analysis after edit failed', err);
+                showToast(`Could not re-check the edited text for identifiers: ${err?.message || err}`,
+                    { tone: 'error', duration: 8000 });
+                return; // leave the text unsaved rather than store un-analyzed text
+            }
+            await putOcrPage({ ...baseRecord(), markdown: nextText, source: 'edit', deid: ocr.deid });
+            refreshCard();
+            return;
+        }
+        await putOcrPage({ ...baseRecord(), markdown: nextText, source: 'edit' });
         rendered.innerHTML = renderMd(nextText);
     });
 
-    // Reveal / re-hide the un-redacted text. The original is always read-only:
-    // it is the record of what the scan actually said.
-    wrap.querySelector('.ov-orig')?.addEventListener('click', (ev) => {
-        showOriginal = !showOriginal;
-        const btn = ev.currentTarget;
-        btn.textContent = showOriginal ? 'Show redacted' : 'Show original';
-        btn.classList.toggle('bg-gray-900', showOriginal);
-        btn.classList.toggle('text-gray-50', showOriginal);
-        btn.classList.toggle('text-gray-600', !showOriginal);
-        const text = currentText();
-        rendered.innerHTML = renderMd(text);
-        ta.value = text;
-        const locked = !editable();
-        ta.readOnly = locked;
-        if (locked) rendered.removeAttribute('contenteditable');
-        else rendered.setAttribute('contenteditable', 'true');
-    });
+    if (deid) {
+        // Click a veil to keep the text (it is not personal information after
+        // all); click a dismissed outline to redact it again.
+        rendered.addEventListener('click', async (ev) => {
+            const el = ev.target.closest('.ov-redaction');
+            if (!el || !rendered.contains(el)) return;
+            const mark = marked.marks[Number(el.dataset.markId)];
+            if (!mark) return;
+            if (mark.kind === 'off') restoreRange(deid, mark.key, mark.start, mark.end);
+            else dismissRange(deid, mark.key, mark.start, mark.end);
+            await saveDeid();
+        });
+
+        // Select any text and confirm to redact something the analyzer missed.
+        rendered.addEventListener('mouseup', () => showRedactButton(rendered, deid, saveDeid));
+
+        wrap.querySelector('.ov-deid-reset')?.addEventListener('click', async () => {
+            resetOverrides(deid);
+            await saveDeid();
+        });
+    }
 
     return wrap;
+}
+
+// ---------------------------------------------------------------- manual redaction
+
+/** Shared floating "Redact" button, created once. */
+let redactButton = null;
+
+function hideRedactButton() {
+    if (redactButton) redactButton.style.display = 'none';
+}
+
+/**
+ * Offer to redact the current selection. The selected string is anchored to
+ * the analyzed unit it sits in - the enclosing .ov-unit wrapper, or the single
+ * whole-page unit when there is no wrapper.
+ */
+function showRedactButton(rendered, deid, save) {
+    const sel = window.getSelection();
+    const text = sel && !sel.isCollapsed ? sel.toString().trim() : '';
+    if (!text || !rendered.contains(sel.anchorNode)) { hideRedactButton(); return; }
+    // Selecting inside an existing veil means they probably meant to click it.
+    if (sel.anchorNode.parentElement?.closest('.ov-redaction')) { hideRedactButton(); return; }
+
+    const unitEl = sel.anchorNode.parentElement?.closest('.ov-unit');
+    const pageUnit = deid.units.find((u) => u.blockIndex < 0);
+    const key = unitEl?.dataset.unitKey || (pageUnit ? unitKey(pageUnit.blockIndex, pageUnit.path) : null);
+    if (!key) { hideRedactButton(); return; }
+
+    if (!redactButton) {
+        redactButton = document.createElement('button');
+        redactButton.type = 'button';
+        redactButton.className =
+            'fixed z-50 rounded-md bg-gray-900 px-2.5 py-1 text-[11px] font-medium text-white shadow-lg hover:bg-gray-700';
+        document.body.appendChild(redactButton);
+    }
+    redactButton.textContent = `Redact "${text.length > 24 ? text.slice(0, 24) + '…' : text}"`;
+    const rect = sel.getRangeAt(0).getBoundingClientRect();
+    redactButton.style.display = 'block';
+    redactButton.style.left = `${Math.max(8, rect.left)}px`;
+    redactButton.style.top = `${Math.max(8, rect.top - 30)}px`;
+    redactButton.onclick = async () => {
+        addManualRedaction(deid, key, text);
+        hideRedactButton();
+        window.getSelection()?.removeAllRanges();
+        await save();
+    };
 }
 
 function renderEmpty(mount) {

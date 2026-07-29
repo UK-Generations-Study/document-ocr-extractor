@@ -155,7 +155,20 @@ export async function openSettingsPanel(deps) {
                         </div>
                         <div id="sp-deid-entities" class="mt-1.5 flex flex-wrap gap-1"></div>
                         <p class="mt-1 text-xs text-gray-500">
+                            Changes apply immediately to reports you have already processed.
                             Unselecting everything detects every type the service supports.
+                        </p>
+                    </div>
+                    <div>
+                        <div class="flex items-center justify-between">
+                            <label for="sp-deid-score" class="text-xs font-medium text-gray-700">Detection confidence</label>
+                            <span id="sp-deid-score-value" class="text-sm font-mono text-gray-700">${Math.round(settings.deidScoreThreshold * 100)}%</span>
+                        </div>
+                        <input id="sp-deid-score" type="range" min="0.2" max="0.95" step="0.05"
+                               value="${settings.deidScoreThreshold}" class="mt-1 w-full accent-green-700"/>
+                        <p class="mt-1 text-xs text-gray-500">
+                            How sure the analyzer must be before something counts as an identifier.
+                            Lower catches more but flags more innocent text; higher is the reverse.
                         </p>
                     </div>
                 </div>
@@ -276,6 +289,17 @@ function wireDeidControls(mount, settings) {
     urlInput.addEventListener('change', async () => {
         await saveSettings({ deidBaseUrl: urlInput.value.trim() || '/presidio' });
         setStatus('Service path saved. Use Test to check it.', null);
+    });
+
+    // Score threshold: live, because every candidate span is stored and the
+    // threshold is applied as a filter when the text is rendered.
+    const scoreSlider = mount.querySelector('#sp-deid-score');
+    const scoreValue = mount.querySelector('#sp-deid-score-value');
+    scoreSlider.addEventListener('input', () => {
+        scoreValue.textContent = `${Math.round(Number(scoreSlider.value) * 100)}%`;
+    });
+    scoreSlider.addEventListener('change', async () => {
+        await saveSettings({ deidScoreThreshold: Number(scoreSlider.value) });
     });
 
     mount.querySelector('#sp-deid-test').addEventListener('click', async () => {
