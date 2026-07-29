@@ -88,11 +88,37 @@ the only thing that gets exported.
 Run the two services:
 
 ```bash
-docker run -d --name presidio-analyzer   -p 5002:3000 mcr.microsoft.com/presidio-analyzer:latest
-docker run -d --name presidio-anonymizer -p 5001:3000 mcr.microsoft.com/presidio-anonymizer:latest
+docker compose -f docker/presidio/compose.yaml up -d --build
 ```
 
 Then enable it in **Settings → De-identification** and press **Test**.
+
+### Detection models
+
+The **anonymizer** applies no model — it is a deterministic operator engine
+that replaces the spans it is given. All the intelligence is in the
+**analyzer**, and `docker/presidio/` builds a customised one:
+
+- **Names, dates, places** come from
+  [`StanfordAIMI/stanford-deidentifier-base`](https://huggingface.co/StanfordAIMI/stanford-deidentifier-base)
+  — PubMedBERT fine-tuned for PHI de-identification (MIT licence; reported F1
+  97.9–99.6 on radiology reports and i2b2). Presidio's stock analyzer uses the
+  general-purpose spaCy `en_core_web_lg`, which is materially weaker on
+  clinical prose. spaCy is still installed but only tokenizes.
+- **UK NHS numbers** come from Presidio's built-in `NhsRecognizer` — a
+  checksum-validated pattern matcher, not a model.
+- **UK postcodes** come from a custom pattern recognizer defined in
+  `docker/presidio/uk-postcode-recognizer.yaml`. Presidio ships a
+  `UkPostcodeRecognizer` but it is disabled by default *and* scores matches at
+  0.1, below the app's 0.5 threshold, so it would never surface a finding.
+
+Everything (torch, transformers, tokenizer, model weights) is baked into the
+image, so the analyzer needs no network access at runtime.
+
+Note that general-purpose PII models — GLiNER-PII, Piiranha and similar — score
+well on generic text but drop to roughly 0.41 F1 on clinical notes, so they
+were not used here. `obi/deid_roberta_i2b2` is a comparable clinical
+alternative if you ever want to A/B it.
 
 The services send no CORS headers, so the browser cannot call them directly.
 Everything goes through the same-origin `/presidio` path, which the Vite dev
@@ -113,8 +139,8 @@ How it behaves:
   redacted can never reach the review pane or an export.
 - Identifier types are configurable; the default set is tuned for UK pathology
   reports (`PERSON`, `DATE_TIME`, `LOCATION`, `PHONE_NUMBER`, `EMAIL_ADDRESS`,
-  `UK_NHS`, `MEDICAL_LICENSE`). **Load all from service** offers every type the
-  running analyzer supports.
+  `UK_NHS`, `UK_POSTCODE`, `MEDICAL_LICENSE`). Each can be switched off, and
+  **Load all from service** offers every type the running analyzer supports.
 - A page that arrives with no block structure still gets de-identified: its
   whole text is redacted as one unit rather than passed through raw.
 

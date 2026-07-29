@@ -1,0 +1,38 @@
+# Presidio services for the de-identification feature.
+#
+#   docker compose -f docker/presidio/compose.yaml up -d --build
+#
+# The analyzer is built from ./Dockerfile (clinical model + UK recognizers);
+# the anonymizer is the stock image - it applies operators and needs no model.
+#
+# Ports match the app's default dev proxy (see vite.config.js):
+#   5002 -> analyzer    (/analyze, /supportedentities, /health)
+#   5001 -> anonymizer  (/anonymize)
+#
+# Both bind to 127.0.0.1 only. These services accept unauthenticated requests
+# and would happily analyze anything sent to them, so they should not be
+# reachable from outside the host.
+
+services:
+  analyzer:
+    build: .
+    image: document-ocr-extractor-presidio:latest
+    container_name: presidio-analyzer
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5002:3000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:3000/health')"]
+      interval: 30s
+      timeout: 10s
+      # The transformer is loaded on the first request, so allow a generous
+      # start period before failures count.
+      start_period: 180s
+      retries: 3
+
+  anonymizer:
+    image: mcr.microsoft.com/presidio-anonymizer:latest
+    container_name: presidio-anonymizer
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5001:3000"

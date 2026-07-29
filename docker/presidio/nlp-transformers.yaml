@@ -1,0 +1,60 @@
+# Presidio Analyzer NLP engine: clinical de-identification transformer.
+#
+# Replaces the stock spaCy `en_core_web_lg` NER with
+# StanfordAIMI/stanford-deidentifier-base (PubMedBERT fine-tuned for PHI
+# de-identification on radiology + clinical notes; MIT licence). The stock
+# model is general-purpose English and materially weaker at spotting names,
+# dates and places in clinical prose.
+#
+# `transformers` points at a directory BAKED INTO THE IMAGE, not a HuggingFace
+# repo id, so the analyzer never reaches the network at runtime - required for
+# the air-gapped deployment. See docker/presidio/Dockerfile.
+#
+# spaCy is still needed alongside it, but only as the tokenizer/sentencizer
+# (en_core_web_sm, ~12 MB); all entity recognition comes from the transformer.
+#
+# Derived from the image's own conf/transformers.yaml - the label mapping
+# below is Presidio's, covering the Stanford model's clinical label set
+# (PATIENT / STAFF / HCW / HOSP / AGE / ID ...).
+
+nlp_engine_name: transformers
+models:
+  - lang_code: en
+    model_name:
+      spacy: en_core_web_sm
+      transformers: /models/stanford-deidentifier-base
+
+ner_model_configuration:
+  labels_to_ignore:
+    - O
+  aggregation_strategy: max   # "simple", "first", "average", "max"
+  stride: 16                  # overlap (in tokenizer tokens) when windowing
+                              # text longer than the model's max length
+  alignment_mode: expand      # "strict", "contract", "expand"
+  model_to_presidio_entity_mapping:
+    PER: PERSON
+    PERSON: PERSON
+    LOC: LOCATION
+    LOCATION: LOCATION
+    GPE: LOCATION
+    ORG: ORGANIZATION
+    ORGANIZATION: ORGANIZATION
+    NORP: NRP
+    AGE: AGE
+    ID: ID
+    EMAIL: EMAIL_ADDRESS
+    PATIENT: PERSON
+    STAFF: PERSON
+    HCW: PERSON            # health care worker
+    HOSP: ORGANIZATION     # hospital
+    HOSPITAL: LOCATION
+    PATORG: ORGANIZATION
+    FACILITY: LOCATION
+    VENDOR: ORGANIZATION
+    DATE: DATE_TIME
+    TIME: DATE_TIME
+    PHONE: PHONE_NUMBER
+
+  low_confidence_score_multiplier: 0.4
+  low_score_entity_names:
+    - ID

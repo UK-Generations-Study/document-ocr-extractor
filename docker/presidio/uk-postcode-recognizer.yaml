@@ -1,0 +1,30 @@
+# Extra recognizers merged into Presidio's own default registry at image build
+# time (see build-recognizers.py). Keeping this as a fragment rather than a
+# full copy of default_recognizers.yaml means we inherit every built-in
+# recognizer - notably NhsRecognizer, which supplies UK_NHS - and can't drift
+# out of sync when the base image updates its defaults.
+
+recognizers:
+  # UK postcodes.
+  #
+  # Presidio ships a UkPostcodeRecognizer, but it is disabled by default AND
+  # scores its matches at 0.1, far below the app's 0.5 score threshold, so it
+  # would never surface a finding. This custom recognizer uses the regex
+  # supplied for this deployment and scores it high enough to be reported.
+  #
+  # The registry applies global_regex_flags (26 = IGNORECASE | MULTILINE |
+  # DOTALL), so lowercase postcodes in OCR output match too.
+  - name: "UK Postcode Recognizer (custom)"
+    supported_language: "en"
+    supported_entity: "UK_POSTCODE"
+    type: custom
+    patterns:
+      - name: "uk postcode"
+        regex: '([A-Z][A-HJ-Y]?\d[A-Z\d]? ?\d[A-Z]{2}|GIR ?0A{2})'
+        score: 0.7
+    context:
+      - postcode
+      - post code
+      - postal
+      - address
+      - addr

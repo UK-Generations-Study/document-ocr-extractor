@@ -124,9 +124,8 @@ export async function openSettingsPanel(deps) {
                         <span class="block font-medium">Remove personal identifiers with Presidio</span>
                         <span class="block text-xs text-gray-600 mt-0.5">
                             After OCR, each recognized text region is analyzed and any detected
-                            identifiers are replaced with <code>[REDACTED]</code> and blacked out on
-                            the page image. Exports (and the LLM, when extraction is enabled) only
-                            ever see the redacted text.
+                            identifiers are replaced with <code>[REDACTED]</code>. Exports (and the
+                            LLM, when extraction is enabled) only ever see the redacted text.
                         </span>
                     </span>
                 </label>

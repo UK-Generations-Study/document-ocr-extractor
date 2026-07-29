@@ -19,7 +19,12 @@
  */
 
 /** Entity types worth detecting in UK pathology reports by default. The full
- *  list the server supports is offered in Settings via supportedEntities(). */
+ *  list the server supports is offered in Settings via supportedEntities(),
+ *  and every one of these can be switched off there.
+ *
+ *  PERSON / DATE_TIME / LOCATION come from the clinical NER model; UK_NHS and
+ *  UK_POSTCODE come from deterministic pattern recognizers (see
+ *  docker/presidio/recognizers.yaml). */
 export const DEFAULT_ENTITIES = [
     'PERSON',
     'DATE_TIME',
@@ -27,6 +32,7 @@ export const DEFAULT_ENTITIES = [
     'PHONE_NUMBER',
     'EMAIL_ADDRESS',
     'UK_NHS',
+    'UK_POSTCODE',
     'MEDICAL_LICENSE',
 ];
 
