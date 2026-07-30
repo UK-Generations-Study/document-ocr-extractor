@@ -111,6 +111,13 @@ that replaces the spans it is given. All the intelligence is in the
   `docker/presidio/uk-postcode-recognizer.yaml`. Presidio ships a
   `UkPostcodeRecognizer` but it is disabled by default *and* scores matches at
   0.1, below the app's 0.5 threshold, so it would never surface a finding.
+- **UK National Insurance numbers** come from Presidio's `UkNinoRecognizer`,
+  which ships disabled and is enabled in `build-recognizers.py`.
+- **Record and hospital numbers** come from the model's `ID` label. Presidio's
+  stock config multiplies `ID` scores by 0.4 as a noisy category, which caps
+  them at ~0.4 — below the 0.5 threshold, so the category could never surface a
+  redaction. `nlp-transformers.yaml` removes that penalty: those numbers are
+  exactly what a clinical de-identification pass should remove.
 
 Everything (torch, transformers, tokenizer, model weights) is baked into the
 image, so the analyzer needs no network access at runtime.
@@ -160,9 +167,11 @@ How it behaves:
   both apply **live** to reports you have already processed - analysis records
   every candidate span, so changing them re-filters stored data rather than
   re-running Presidio. The default set is tuned for UK pathology reports
-  (`PERSON`, `DATE_TIME`, `LOCATION`, `PHONE_NUMBER`, `EMAIL_ADDRESS`,
-  `UK_NHS`, `UK_POSTCODE`, `MEDICAL_LICENSE`); **Load all from service** offers
-  every type the running analyzer supports.
+  (`PERSON`, `DATE_TIME`, `LOCATION`, `ORGANIZATION`, `PHONE_NUMBER`,
+  `EMAIL_ADDRESS`, `ID`, `UK_NHS`, `UK_NINO`, `UK_POSTCODE`,
+  `MEDICAL_LICENSE`); **Load all from service** offers every type the running
+  analyzer supports. Types added to this list in a later version are adopted by
+  existing profiles automatically, without resurrecting ones you switched off.
 - A page that arrives with no block structure still gets de-identified: its
   whole text is redacted as one unit rather than passed through raw.
 

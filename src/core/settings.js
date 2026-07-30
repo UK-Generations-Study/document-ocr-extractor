@@ -43,6 +43,12 @@ const DEFAULTS = {
     deidBaseUrl: '/presidio',
     /** Entity types to detect; empty array means "everything the server supports". */
     deidEntities: DEFAULT_ENTITIES,
+    /**
+     * Snapshot of DEFAULT_ENTITIES as of the last save. Lets a new shipped
+     * default be added to an existing profile's selection without resurrecting
+     * types the user deliberately switched off - only the difference is added.
+     */
+    deidKnownDefaults: DEFAULT_ENTITIES,
     /** Minimum analyzer confidence for a span to count as PII. */
     deidScoreThreshold: 0.5,
 };
@@ -54,6 +60,21 @@ export async function getSettings() {
     const rec = await getConfigRecord('settings');
     const { id, ...saved } = rec || {};
     cache = { ...DEFAULTS, ...saved };
+
+    // Adopt identifier types added to the shipped defaults since this profile
+    // was last saved. Without this, an existing profile would silently keep an
+    // older selection and never redact a newly-added type. Only the difference
+    // is added, so a type the user turned off stays off. An empty selection
+    // already means "everything", so there is nothing to merge into.
+    const known = saved.deidKnownDefaults;
+    if (Array.isArray(known) && cache.deidEntities?.length) {
+        const added = DEFAULT_ENTITIES.filter((e) => !known.includes(e));
+        if (added.length) {
+            cache.deidEntities = [...new Set([...cache.deidEntities, ...added])];
+            cache.deidKnownDefaults = [...DEFAULT_ENTITIES];
+            await saveConfigRecord({ id: 'settings', ...cache });
+        }
+    }
     return cache;
 }
 

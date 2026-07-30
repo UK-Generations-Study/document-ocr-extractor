@@ -30,9 +30,12 @@ export const DEFAULT_ENTITIES = [
     'PERSON',
     'DATE_TIME',
     'LOCATION',
+    'ORGANIZATION',
     'PHONE_NUMBER',
     'EMAIL_ADDRESS',
+    'ID',
     'UK_NHS',
+    'UK_NINO',
     'UK_POSTCODE',
     'MEDICAL_LICENSE',
 ];

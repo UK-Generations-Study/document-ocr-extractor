@@ -55,6 +55,12 @@ ner_model_configuration:
     TIME: DATE_TIME
     PHONE: PHONE_NUMBER
 
+  # Presidio's stock config penalises ID by this multiplier, on the grounds
+  # that it is a noisy category. That cap is left in place but applied to
+  # nothing: a penalised ID tops out at ~0.4, below the app's 0.5 default
+  # threshold, so the category could never surface a redaction however it was
+  # configured in the UI. Hospital and record numbers are exactly what a
+  # clinical de-identification pass should remove, and over-redaction is the
+  # safe direction here, so ID is scored on its merits like every other label.
   low_confidence_score_multiplier: 0.4
-  low_score_entity_names:
-    - ID
+  low_score_entity_names: []
