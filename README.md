@@ -148,6 +148,10 @@ How it behaves:
   the decision stays visible, and clicking it offers **Redact this** to put it
   back. Select any text and confirm **Redact** to remove something the analyzer
   missed. **Reset** returns the page to what Presidio proposed.
+- Three views per page: **Rendered** (formatted) and **Raw** (Markdown source)
+  are both editable and both show the veils, so you can redact from either;
+  **Export** is a read-only preview of the text that will actually leave the
+  app, with each veiled span replaced by `[REDACTED]`.
 - On by default. It fails closed: if the Presidio service is unreachable,
   documents stop with an error rather than passing through un-redacted, so turn
   it off in Settings if you are running without Presidio.

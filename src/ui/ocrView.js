@@ -33,6 +33,7 @@ import {
     hasOverrides,
     isCurrentSchema,
     reanchorAfterEdit,
+    pageOutputText,
     redactionSummary,
     resetOverrides,
     restoreRange,
@@ -335,7 +336,15 @@ function deepProgressBarHtml(st) {
     return '';
 }
 
-function pageSectionEl(doc, pageIndex, page, ocr) {
+/**
+ * One page card.
+ *
+ * `restore` carries view state across a rebuild - which tab was showing and
+ * how far the body was scrolled. Without it, saving an edit would silently
+ * bounce the abstractor back to the Rendered tab at the top of the page,
+ * and would swallow the very click that triggered the save.
+ */
+function pageSectionEl(doc, pageIndex, page, ocr, restore = {}) {
     const wrap = document.createElement('div');
     wrap.className = 'border border-gray-200 rounded shadow-sm bg-white';
     wrap.dataset.pageIndex = String(pageIndex);
@@ -351,11 +360,13 @@ function pageSectionEl(doc, pageIndex, page, ocr) {
             ? `<span class="ml-2 inline-flex items-center rounded bg-gray-100 text-gray-700 ring-1 ring-inset ring-gray-300 px-1.5 py-0.5 text-[10px]">edited</span>`
             : '';
 
-    // With de-identification active the rendered view becomes the REDACTION
-    // surface: it shows the original text with a translucent veil over every
-    // span that will be redacted on export, so the abstractor can read what is
-    // being removed and correct it. Editing moves to the Raw tab, which keeps
-    // character offsets and free-text editing from fighting each other.
+    // Both editable views show the ORIGINAL text with a translucent veil over
+    // every span that will be redacted on export, so the abstractor can read
+    // what is being removed and correct it:
+    //   Rendered  formatted, veiled, editable
+    //   Raw       markdown source, veiled, editable
+    //   Export    read-only preview of what actually leaves the app, with
+    //             each veiled span replaced by [REDACTED]
     const deid = isCurrentSchema(ocr?.deid) ? ocr.deid : null;
     const originalText = ocr?.markdown ?? '';
 
@@ -388,45 +399,67 @@ function pageSectionEl(doc, pageIndex, page, ocr) {
     <div class="flex items-center gap-2">
         ${resetBtn}
         <div class="ov-toggle inline-flex rounded-md ring-1 ring-gray-200 overflow-hidden" role="group">
-            <button type="button" data-mode="rendered" class="ov-mode ov-mode-rendered px-2 py-0.5 text-[11px] font-medium text-gray-700 bg-gray-100"
+            <button type="button" data-mode="rendered" class="ov-mode px-2 py-0.5 text-[11px] font-medium"
                     title="${deid ? 'Formatted view - edit the text, and select it to redact' : 'Formatted view - editable'}">Rendered</button>
-            <button type="button" data-mode="raw" class="ov-mode ov-mode-raw px-2 py-0.5 text-[11px] font-medium text-gray-500 hover:bg-gray-50"
-                    title="Plain markdown - editable">Raw</button>
+            <button type="button" data-mode="raw" class="ov-mode px-2 py-0.5 text-[11px] font-medium"
+                    title="${deid ? 'Markdown source - edit the text, and select it to redact' : 'Markdown source - editable'}">Raw</button>
+            ${deid ? `<button type="button" data-mode="export" class="ov-mode px-2 py-0.5 text-[11px] font-medium"
+                    title="Read-only preview of the text that will be exported">Export</button>` : ''}
         </div>
     </div>
 </div>
 <div class="ov-body overflow-y-auto" style="aspect-ratio: ${page.width} / ${page.height};">
-    <div class="ov-rendered prose prose-sm max-w-none p-4 text-sm leading-relaxed focus:outline-none focus:bg-green-50/30"
+    <div class="ov-pane ov-rendered prose prose-sm max-w-none p-4 text-sm leading-relaxed focus:outline-none focus:bg-green-50/30"
          ${readonly ? '' : 'contenteditable="true" spellcheck="false"'}
          style="--tw-prose-headings: #111827;">${renderedHtml || `<p class="text-gray-400 italic">${placeholder || 'No OCR text yet.'}</p>`}</div>
-    <textarea
-        data-page-key="${escapeAttr(page.blobKey)}"
-        class="ov-raw w-full h-full p-3 text-sm font-mono resize-none focus:outline-none focus:ring-0 hidden"
-        placeholder="${placeholder}"
-        ${readonly ? 'readonly' : ''}
-    >${escapeHtml(initial)}</textarea>
+    <!-- Markdown source. A contenteditable rather than a textarea because a
+         textarea cannot contain the veil elements. plaintext-only keeps the
+         browser from turning Enter into markup, so innerText round-trips the
+         source exactly. -->
+    <div data-page-key="${escapeAttr(page.blobKey)}"
+         class="ov-pane ov-raw hidden p-3 text-sm font-mono whitespace-pre-wrap break-words focus:outline-none focus:bg-green-50/30"
+         ${readonly ? '' : 'contenteditable="plaintext-only" spellcheck="false"'}></div>
+    ${deid ? `<div class="ov-pane ov-export hidden p-3 text-sm font-mono whitespace-pre-wrap break-words text-gray-700"></div>` : ''}
 </div>`;
 
-    // Wire mode toggle.
     const rendered = wrap.querySelector('.ov-rendered');
-    const rawTa = wrap.querySelector('.ov-raw');
-    const btnRendered = wrap.querySelector('.ov-mode-rendered');
-    const btnRaw = wrap.querySelector('.ov-mode-raw');
-    const applyMode = (mode) => {
-        const isRaw = mode === 'raw';
-        rendered.classList.toggle('hidden', isRaw);
-        rawTa.classList.toggle('hidden', !isRaw);
-        btnRaw.classList.toggle('bg-gray-100', isRaw);
-        btnRaw.classList.toggle('text-gray-700', isRaw);
-        btnRaw.classList.toggle('text-gray-500', !isRaw);
-        btnRendered.classList.toggle('bg-gray-100', !isRaw);
-        btnRendered.classList.toggle('text-gray-700', !isRaw);
-        btnRendered.classList.toggle('text-gray-500', isRaw);
-    };
-    btnRendered.addEventListener('click', () => applyMode('rendered'));
-    btnRaw.addEventListener('click', () => applyMode('raw'));
+    const rawEl = wrap.querySelector('.ov-raw');
+    const exportEl = wrap.querySelector('.ov-export');
+    const body = wrap.querySelector('.ov-body');
 
-    const ta = rawTa;
+    // Raw pane: the same marked-up Markdown the rendered view is built from,
+    // but shown as source instead of being run through micromark. decorateMarks
+    // then converts the sentinels to veils exactly as it does there, so both
+    // panes share one code path - and because the pane's text IS the source,
+    // reading an edit back needs no Markdown round-trip.
+    rawEl.textContent = marked.markdown || '';
+    if (deid) decorateMarks(rawEl, marked.marks);
+    if (!marked.markdown && placeholder) {
+        rawEl.textContent = '';
+        rawEl.dataset.placeholder = placeholder;
+    }
+
+    if (exportEl) exportEl.textContent = pageOutputText(ocr) || '(nothing to export)';
+
+    let currentMode = restore.mode === 'raw' || restore.mode === 'export' ? restore.mode : 'rendered';
+    const modeButtons = [...wrap.querySelectorAll('.ov-mode')];
+    const applyMode = (mode) => {
+        currentMode = mode;
+        wrap.querySelectorAll('.ov-pane').forEach((p) => {
+            p.classList.toggle('hidden', !p.classList.contains(`ov-${mode}`));
+        });
+        modeButtons.forEach((b) => {
+            const on = b.dataset.mode === mode;
+            b.classList.toggle('bg-gray-100', on);
+            b.classList.toggle('text-gray-700', on);
+            b.classList.toggle('text-gray-500', !on);
+            b.classList.toggle('hover:bg-gray-50', !on);
+        });
+    };
+    modeButtons.forEach((b) => b.addEventListener('click', () => applyMode(b.dataset.mode)));
+    applyMode(currentMode);
+    if (restore.bodyScroll) body.scrollTop = restore.bodyScroll;
+
     const renderMd = (text) => (text
         ? micromark(text, { extensions: [gfm()], htmlExtensions: [gfmHtml()] })
         : `<p class="text-gray-400 italic">No OCR text yet.</p>`);
@@ -447,9 +480,14 @@ function pageSectionEl(doc, pageIndex, page, ocr) {
     });
 
     /** Rebuild just this card in place, so a redaction change doesn't reset
-     *  the scroll position of the whole pane. */
+     *  the scroll position of the whole pane. The active tab and the body's
+     *  scroll are carried over: a rebuild is triggered by saving an edit, and
+     *  the click that caused the save is often the one switching tabs. */
     const refreshCard = () => {
-        wrap.replaceWith(pageSectionEl(doc, pageIndex, page, ocr));
+        wrap.replaceWith(pageSectionEl(doc, pageIndex, page, ocr, {
+            mode: currentMode,
+            bodyScroll: body.scrollTop,
+        }));
     };
 
     /** Persist the page's redaction decisions and redraw. */
@@ -459,14 +497,21 @@ function pageSectionEl(doc, pageIndex, page, ocr) {
         refreshCard();
     };
 
-    /** Save edited page text, carrying redactions across (see reanchorAfterEdit). */
+    /** Save edited page text, carrying redactions across (see reanchorAfterEdit).
+     *
+     *  The in-memory record is updated as well as the stored one: the card is
+     *  rebuilt from `ocr`, so leaving `ocr.markdown` stale here would redraw
+     *  the pre-edit text over a correctly-saved edit. */
     const persistEditedText = async (nextText) => {
         if (!deid) {
+            ocr.markdown = nextText;
             await putOcrPage({ ...baseRecord(), markdown: nextText, source: 'edit' });
             return;
         }
         const { deid: next, lost } = reanchorAfterEdit(deid, nextText);
+        ocr.markdown = nextText;
         ocr.deid = next;
+        ocr.source = 'edit';
         await putOcrPage({ ...baseRecord(), markdown: nextText, source: 'edit', deid: next });
         if (lost) {
             showToast(
@@ -485,34 +530,35 @@ function pageSectionEl(doc, pageIndex, page, ocr) {
     // the stored Markdown: turndown never reproduces its input byte for byte
     // (escaping, emphasis markers), so comparing against the stored text would
     // read as an edit on every blur and needlessly re-anchor.
+    // Persist on blur so we don't hammer IndexedDB on every keystroke.
     if (!readonly) {
-        const baseline = turndown.turndown(rendered.innerHTML).trim();
+        const renderedBaseline = turndown.turndown(rendered.innerHTML).trim();
         rendered.addEventListener('blur', async () => {
             const nextMd = turndown.turndown(rendered.innerHTML).trim();
-            if (nextMd === baseline) return;
-            rawTa.value = nextMd;
+            if (nextMd === renderedBaseline) return;
             await persistEditedText(nextMd);
+        });
+
+        // The raw pane's own text is the Markdown, so no round-trip is needed:
+        // innerText (not textContent) because it reflects the line breaks the
+        // browser actually rendered.
+        rawEl.addEventListener('blur', async () => {
+            const nextText = rawEl.innerText.replace(/\n$/, '');
+            if (nextText === initial) return;
+            await persistEditedText(nextText);
+            if (!deid) rendered.innerHTML = renderMd(nextText);
         });
     }
 
-    // Raw pane is the text editor in both modes. Persist on blur so we don't
-    // hammer IndexedDB on every keystroke.
-    // Raw pane is the same editor over plain Markdown.
-    ta.addEventListener('blur', async () => {
-        if (readonly) return;
-        const nextText = ta.value;
-        if (nextText === initial) return;
-        await persistEditedText(nextText);
-        if (!deid) rendered.innerHTML = renderMd(nextText);
-    });
-
     if (deid) {
         // Both redaction actions are offered as a floating button rather than
-        // bound to a plain click, because a plain click now has to place the
-        // text cursor: select text to redact it, click inside a veil to keep it.
-        rendered.addEventListener('mouseup', () =>
-            showSpanAction(rendered, deid, marked.marks, saveDeid));
-        rendered.addEventListener('keyup', hideSpanAction);
+        // bound to a plain click, because a plain click has to place the text
+        // cursor: select text to redact it, click inside a veil to keep it.
+        // Wired on both editable panes so redacting works wherever you are.
+        for (const pane of [rendered, rawEl]) {
+            pane.addEventListener('mouseup', () => showSpanAction(pane, deid, marked.marks, saveDeid));
+            pane.addEventListener('keyup', hideSpanAction);
+        }
 
         wrap.querySelector('.ov-deid-reset')?.addEventListener('click', async () => {
             resetOverrides(deid);
