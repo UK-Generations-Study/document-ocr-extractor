@@ -104,6 +104,16 @@ export function initOcrView() {
         }
     });
 
+    // Any click elsewhere dismisses the floating redaction action; the panes'
+    // own mouseup re-offers it when the new caret or selection warrants one.
+    // The button itself is excluded - hiding it here would remove it before
+    // its click could fire.
+    document.addEventListener('mousedown', (ev) => {
+        if (ev.target !== spanActionButton) hideSpanAction();
+    });
+    // It is position-fixed, so a scroll would leave it pointing at nothing.
+    document.getElementById(MOUNT_ID)?.addEventListener('scroll', hideSpanAction, { passive: true });
+
     // Deferred renders fire once the user tabs/clicks out of the editor they
     // were in. The small delay lets the editor's own blur-persist commit to
     // IndexedDB before we re-read it.
@@ -339,10 +349,10 @@ function deepProgressBarHtml(st) {
 /**
  * One page card.
  *
- * `restore` carries view state across a rebuild - which tab was showing and
- * how far the body was scrolled. Without it, saving an edit would silently
- * bounce the abstractor back to the Rendered tab at the top of the page,
- * and would swallow the very click that triggered the save.
+ * `restore.mode` carries the active tab across a rebuild; without it, saving
+ * an edit would silently bounce the abstractor back to the Rendered tab.
+ * Scroll positions are restored by the caller AFTER insertion - see
+ * refreshCard - because a detached element has no scrollable extent.
  */
 function pageSectionEl(doc, pageIndex, page, ocr, restore = {}) {
     const wrap = document.createElement('div');
@@ -456,9 +466,17 @@ function pageSectionEl(doc, pageIndex, page, ocr, restore = {}) {
             b.classList.toggle('hover:bg-gray-50', !on);
         });
     };
-    modeButtons.forEach((b) => b.addEventListener('click', () => applyMode(b.dataset.mode)));
+    // Switch on mousedown, not click: mousedown fires BEFORE the editor loses
+    // focus, so the mode is already recorded by the time the blur handler saves
+    // the edit and rebuilds the card. Waiting for click loses the race - the
+    // rebuild can land first and detach the button mid-gesture, swallowing it.
+    // click is still wired for keyboard activation, and applyMode is idempotent.
+    modeButtons.forEach((b) => {
+        const pick = () => { hideSpanAction(); applyMode(b.dataset.mode); };
+        b.addEventListener('mousedown', pick);
+        b.addEventListener('click', pick);
+    });
     applyMode(currentMode);
-    if (restore.bodyScroll) body.scrollTop = restore.bodyScroll;
 
     const renderMd = (text) => (text
         ? micromark(text, { extensions: [gfm()], htmlExtensions: [gfmHtml()] })
@@ -484,10 +502,21 @@ function pageSectionEl(doc, pageIndex, page, ocr, restore = {}) {
      *  scroll are carried over: a rebuild is triggered by saving an edit, and
      *  the click that caused the save is often the one switching tabs. */
     const refreshCard = () => {
-        wrap.replaceWith(pageSectionEl(doc, pageIndex, page, ocr, {
-            mode: currentMode,
-            bodyScroll: body.scrollTop,
-        }));
+        // The work pane's own scroll has to be restored too: swapping the card
+        // out momentarily shortens the document, and the browser clamps
+        // scrollTop while it is detached - which reads as the page jumping back
+        // to the top the moment you redact something.
+        const mount = document.getElementById(MOUNT_ID);
+        const paneScroll = mount?.scrollTop ?? 0;
+        const bodyScroll = body.scrollTop;
+        const next = pageSectionEl(doc, pageIndex, page, ocr, { mode: currentMode });
+        wrap.replaceWith(next);
+        // Only after insertion: a detached element has no scrollable extent, so
+        // assigning scrollTop while it is still out of the document silently
+        // does nothing.
+        const nextBody = next.querySelector('.ov-body');
+        if (nextBody) nextBody.scrollTop = bodyScroll;
+        if (mount) mount.scrollTop = paneScroll;
     };
 
     /** Persist the page's redaction decisions and redraw. */
@@ -556,7 +585,13 @@ function pageSectionEl(doc, pageIndex, page, ocr, restore = {}) {
         // cursor: select text to redact it, click inside a veil to keep it.
         // Wired on both editable panes so redacting works wherever you are.
         for (const pane of [rendered, rawEl]) {
-            pane.addEventListener('mouseup', () => showSpanAction(pane, deid, marked.marks, saveDeid));
+            // Deferred a tick: clicking ON an existing selection does not
+            // collapse it until after mouseup, so reading the selection
+            // synchronously would still see the old range and leave the button
+            // showing over text the caret has already left.
+            pane.addEventListener('mouseup', () => {
+                setTimeout(() => showSpanAction(pane, deid, marked.marks, saveDeid), 0);
+            });
             pane.addEventListener('keyup', hideSpanAction);
         }
 
@@ -603,54 +638,51 @@ function placeSpanAction(rect, label, onClick) {
     btn.onclick = onClick;
 }
 
-const ellipsize = (s, n) => (s.length > n ? `${s.slice(0, n)}…` : s);
-
 /**
  * Offer the redaction action that fits what the caret or selection is on:
  *
- *   selection outside a veil  ->  redact it (the analyzer missed something)
- *   caret inside a veil       ->  keep that text (it is not personal after all)
- *   caret inside an outline   ->  redact it again
+ *   any selection         ->  Redact just what is selected
+ *   caret inside a veil   ->  Unredact that span
+ *   caret inside an outline -> Redact that span again
  *
- * A selection is anchored to the analyzed unit it sits in - the enclosing
+ * A SELECTION always wins over the span it sits in. Selecting part of an
+ * existing span means narrowing it - "redact only these three digits" - so
+ * treating that as a click on the whole span would redact far more than was
+ * asked for.
+ *
+ * The selection is anchored to the analyzed unit it sits in - the enclosing
  * .ov-unit wrapper, or the single whole-page unit when there is no wrapper.
  */
-function showSpanAction(rendered, deid, marks, save) {
+function showSpanAction(pane, deid, marks, save) {
     const sel = window.getSelection();
-    if (!sel || !sel.anchorNode || !rendered.contains(sel.anchorNode)) { hideSpanAction(); return; }
+    if (!sel || !sel.anchorNode || !pane.contains(sel.anchorNode)) { hideSpanAction(); return; }
     const anchorEl = sel.anchorNode.parentElement;
-    const markEl = anchorEl?.closest('.ov-redaction');
+    const text = sel.isCollapsed ? '' : sel.toString().trim();
 
-    // Caret (or selection) sitting on an existing span: offer to flip it.
-    if (markEl) {
-        const mark = marks[Number(markEl.dataset.markId)];
-        if (!mark) { hideSpanAction(); return; }
-        const dismissed = mark.kind === 'off';
-        placeSpanAction(
-            markEl.getBoundingClientRect(),
-            dismissed ? 'Redact this' : 'Keep this text',
-            async () => {
-                if (dismissed) restoreRange(deid, mark.key, mark.start, mark.end);
-                else dismissRange(deid, mark.key, mark.start, mark.end);
-                hideSpanAction();
-                await save();
-            },
-        );
+    if (text) {
+        const unitEl = anchorEl?.closest('.ov-unit');
+        const pageUnit = deid.units.find((u) => u.blockIndex < 0);
+        const key = unitEl?.dataset.unitKey || (pageUnit ? unitKey(pageUnit.blockIndex, pageUnit.path) : null);
+        if (!key) { hideSpanAction(); return; }
+        placeSpanAction(sel.getRangeAt(0).getBoundingClientRect(), 'Redact', async () => {
+            addManualRedaction(deid, key, text);
+            hideSpanAction();
+            window.getSelection()?.removeAllRanges();
+            await save();
+        });
         return;
     }
 
-    const text = sel.isCollapsed ? '' : sel.toString().trim();
-    if (!text) { hideSpanAction(); return; }
-
-    const unitEl = anchorEl?.closest('.ov-unit');
-    const pageUnit = deid.units.find((u) => u.blockIndex < 0);
-    const key = unitEl?.dataset.unitKey || (pageUnit ? unitKey(pageUnit.blockIndex, pageUnit.path) : null);
-    if (!key) { hideSpanAction(); return; }
-
-    placeSpanAction(sel.getRangeAt(0).getBoundingClientRect(), `Redact "${ellipsize(text, 24)}"`, async () => {
-        addManualRedaction(deid, key, text);
+    // Collapsed caret resting on an existing span: offer to flip it.
+    const markEl = anchorEl?.closest('.ov-redaction');
+    if (!markEl) { hideSpanAction(); return; }
+    const mark = marks[Number(markEl.dataset.markId)];
+    if (!mark) { hideSpanAction(); return; }
+    const dismissed = mark.kind === 'off';
+    placeSpanAction(markEl.getBoundingClientRect(), dismissed ? 'Redact' : 'Unredact', async () => {
+        if (dismissed) restoreRange(deid, mark.key, mark.start, mark.end);
+        else dismissRange(deid, mark.key, mark.start, mark.end);
         hideSpanAction();
-        window.getSelection()?.removeAllRanges();
         await save();
     });
 }
