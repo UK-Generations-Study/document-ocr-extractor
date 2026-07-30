@@ -389,15 +389,15 @@ function pageSectionEl(doc, pageIndex, page, ocr) {
         ${resetBtn}
         <div class="ov-toggle inline-flex rounded-md ring-1 ring-gray-200 overflow-hidden" role="group">
             <button type="button" data-mode="rendered" class="ov-mode ov-mode-rendered px-2 py-0.5 text-[11px] font-medium text-gray-700 bg-gray-100"
-                    title="${deid ? 'Review and adjust redactions' : 'Formatted view'}">${deid ? 'Redact' : 'Rendered'}</button>
+                    title="${deid ? 'Formatted view - edit the text, and select it to redact' : 'Formatted view - editable'}">Rendered</button>
             <button type="button" data-mode="raw" class="ov-mode ov-mode-raw px-2 py-0.5 text-[11px] font-medium text-gray-500 hover:bg-gray-50"
-                    title="${deid ? 'Edit the OCR text' : 'Plain markdown'}">${deid ? 'Edit' : 'Raw'}</button>
+                    title="Plain markdown - editable">Raw</button>
         </div>
     </div>
 </div>
 <div class="ov-body overflow-y-auto" style="aspect-ratio: ${page.width} / ${page.height};">
     <div class="ov-rendered prose prose-sm max-w-none p-4 text-sm leading-relaxed focus:outline-none focus:bg-green-50/30"
-         ${readonly || deid ? '' : 'contenteditable="true" spellcheck="false"'}
+         ${readonly ? '' : 'contenteditable="true" spellcheck="false"'}
          style="--tw-prose-headings: #111827;">${renderedHtml || `<p class="text-gray-400 italic">${placeholder || 'No OCR text yet.'}</p>`}</div>
     <textarea
         data-page-key="${escapeAttr(page.blobKey)}"
@@ -459,58 +459,60 @@ function pageSectionEl(doc, pageIndex, page, ocr) {
         refreshCard();
     };
 
-    // Rendered pane, no de-identification: unchanged editable behaviour.
-    if (!deid && !readonly) {
+    /** Save edited page text, carrying redactions across (see reanchorAfterEdit). */
+    const persistEditedText = async (nextText) => {
+        if (!deid) {
+            await putOcrPage({ ...baseRecord(), markdown: nextText, source: 'edit' });
+            return;
+        }
+        const { deid: next, lost } = reanchorAfterEdit(deid, nextText);
+        ocr.deid = next;
+        await putOcrPage({ ...baseRecord(), markdown: nextText, source: 'edit', deid: next });
+        if (lost) {
+            showToast(
+                `${lost} redaction${lost === 1 ? '' : 's'} could not be re-applied after your edit - that text has changed. Check the page and redact by hand if needed.`,
+                { tone: 'error', duration: 9000 },
+            );
+        }
+        refreshCard();
+    };
+
+    // The rendered pane is editable in both modes: click in, type, delete.
+    // Veils are display-only decoration, so turndown drops the wrapper elements
+    // and gives back the plain text.
+    //
+    // The comparison baseline is the round-trip of what we just rendered, NOT
+    // the stored Markdown: turndown never reproduces its input byte for byte
+    // (escaping, emphasis markers), so comparing against the stored text would
+    // read as an edit on every blur and needlessly re-anchor.
+    if (!readonly) {
+        const baseline = turndown.turndown(rendered.innerHTML).trim();
         rendered.addEventListener('blur', async () => {
             const nextMd = turndown.turndown(rendered.innerHTML).trim();
-            if (nextMd === (rawTa.value || '').trim()) return;
+            if (nextMd === baseline) return;
             rawTa.value = nextMd;
-            await putOcrPage({ ...baseRecord(), markdown: nextMd, source: 'edit' });
+            await persistEditedText(nextMd);
         });
     }
 
     // Raw pane is the text editor in both modes. Persist on blur so we don't
     // hammer IndexedDB on every keystroke.
+    // Raw pane is the same editor over plain Markdown.
     ta.addEventListener('blur', async () => {
         if (readonly) return;
         const nextText = ta.value;
         if (nextText === initial) return;
-        if (deid) {
-            // Automatic detection ran once, after OCR, and is not repeated:
-            // re-running it would resurrect dismissed spans and drop manual
-            // ones. The existing redactions are re-anchored onto the edited
-            // text instead - see reanchorAfterEdit.
-            const { deid: next, lost } = reanchorAfterEdit(deid, nextText);
-            ocr.deid = next;
-            await putOcrPage({ ...baseRecord(), markdown: nextText, source: 'edit', deid: next });
-            if (lost) {
-                showToast(
-                    `${lost} redaction${lost === 1 ? '' : 's'} could not be re-applied after your edit - that text has changed. Check the page and redact by hand if needed.`,
-                    { tone: 'error', duration: 9000 },
-                );
-            }
-            refreshCard();
-            return;
-        }
-        await putOcrPage({ ...baseRecord(), markdown: nextText, source: 'edit' });
-        rendered.innerHTML = renderMd(nextText);
+        await persistEditedText(nextText);
+        if (!deid) rendered.innerHTML = renderMd(nextText);
     });
 
     if (deid) {
-        // Click a veil to keep the text (it is not personal information after
-        // all); click a dismissed outline to redact it again.
-        rendered.addEventListener('click', async (ev) => {
-            const el = ev.target.closest('.ov-redaction');
-            if (!el || !rendered.contains(el)) return;
-            const mark = marked.marks[Number(el.dataset.markId)];
-            if (!mark) return;
-            if (mark.kind === 'off') restoreRange(deid, mark.key, mark.start, mark.end);
-            else dismissRange(deid, mark.key, mark.start, mark.end);
-            await saveDeid();
-        });
-
-        // Select any text and confirm to redact something the analyzer missed.
-        rendered.addEventListener('mouseup', () => showRedactButton(rendered, deid, saveDeid));
+        // Both redaction actions are offered as a floating button rather than
+        // bound to a plain click, because a plain click now has to place the
+        // text cursor: select text to redact it, click inside a veil to keep it.
+        rendered.addEventListener('mouseup', () =>
+            showSpanAction(rendered, deid, marked.marks, saveDeid));
+        rendered.addEventListener('keyup', hideSpanAction);
 
         wrap.querySelector('.ov-deid-reset')?.addEventListener('click', async () => {
             resetOverrides(deid);
@@ -523,48 +525,88 @@ function pageSectionEl(doc, pageIndex, page, ocr) {
 
 // ---------------------------------------------------------------- manual redaction
 
-/** Shared floating "Redact" button, created once. */
-let redactButton = null;
+/** Shared floating action button, created once. */
+let spanActionButton = null;
 
-function hideRedactButton() {
-    if (redactButton) redactButton.style.display = 'none';
+function hideSpanAction() {
+    if (spanActionButton) spanActionButton.style.display = 'none';
+}
+// Exposed under the old name for the render path.
+const hideRedactButton = hideSpanAction;
+
+function spanActionEl() {
+    if (!spanActionButton) {
+        spanActionButton = document.createElement('button');
+        spanActionButton.type = 'button';
+        spanActionButton.className =
+            'fixed z-50 rounded-md bg-gray-900 px-2.5 py-1 text-[11px] font-medium text-white shadow-lg hover:bg-gray-700';
+        // Keep focus in the editor: taking it would fire the pane's blur
+        // handler, re-render the card, and destroy this button mid-click.
+        spanActionButton.addEventListener('mousedown', (e) => e.preventDefault());
+        document.body.appendChild(spanActionButton);
+    }
+    return spanActionButton;
 }
 
-/**
- * Offer to redact the current selection. The selected string is anchored to
- * the analyzed unit it sits in - the enclosing .ov-unit wrapper, or the single
- * whole-page unit when there is no wrapper.
- */
-function showRedactButton(rendered, deid, save) {
-    const sel = window.getSelection();
-    const text = sel && !sel.isCollapsed ? sel.toString().trim() : '';
-    if (!text || !rendered.contains(sel.anchorNode)) { hideRedactButton(); return; }
-    // Selecting inside an existing veil means they probably meant to click it.
-    if (sel.anchorNode.parentElement?.closest('.ov-redaction')) { hideRedactButton(); return; }
+function placeSpanAction(rect, label, onClick) {
+    const btn = spanActionEl();
+    btn.textContent = label;
+    btn.style.display = 'block';
+    btn.style.left = `${Math.max(8, rect.left)}px`;
+    btn.style.top = `${Math.max(8, rect.top - 30)}px`;
+    btn.onclick = onClick;
+}
 
-    const unitEl = sel.anchorNode.parentElement?.closest('.ov-unit');
+const ellipsize = (s, n) => (s.length > n ? `${s.slice(0, n)}…` : s);
+
+/**
+ * Offer the redaction action that fits what the caret or selection is on:
+ *
+ *   selection outside a veil  ->  redact it (the analyzer missed something)
+ *   caret inside a veil       ->  keep that text (it is not personal after all)
+ *   caret inside an outline   ->  redact it again
+ *
+ * A selection is anchored to the analyzed unit it sits in - the enclosing
+ * .ov-unit wrapper, or the single whole-page unit when there is no wrapper.
+ */
+function showSpanAction(rendered, deid, marks, save) {
+    const sel = window.getSelection();
+    if (!sel || !sel.anchorNode || !rendered.contains(sel.anchorNode)) { hideSpanAction(); return; }
+    const anchorEl = sel.anchorNode.parentElement;
+    const markEl = anchorEl?.closest('.ov-redaction');
+
+    // Caret (or selection) sitting on an existing span: offer to flip it.
+    if (markEl) {
+        const mark = marks[Number(markEl.dataset.markId)];
+        if (!mark) { hideSpanAction(); return; }
+        const dismissed = mark.kind === 'off';
+        placeSpanAction(
+            markEl.getBoundingClientRect(),
+            dismissed ? 'Redact this' : 'Keep this text',
+            async () => {
+                if (dismissed) restoreRange(deid, mark.key, mark.start, mark.end);
+                else dismissRange(deid, mark.key, mark.start, mark.end);
+                hideSpanAction();
+                await save();
+            },
+        );
+        return;
+    }
+
+    const text = sel.isCollapsed ? '' : sel.toString().trim();
+    if (!text) { hideSpanAction(); return; }
+
+    const unitEl = anchorEl?.closest('.ov-unit');
     const pageUnit = deid.units.find((u) => u.blockIndex < 0);
     const key = unitEl?.dataset.unitKey || (pageUnit ? unitKey(pageUnit.blockIndex, pageUnit.path) : null);
-    if (!key) { hideRedactButton(); return; }
+    if (!key) { hideSpanAction(); return; }
 
-    if (!redactButton) {
-        redactButton = document.createElement('button');
-        redactButton.type = 'button';
-        redactButton.className =
-            'fixed z-50 rounded-md bg-gray-900 px-2.5 py-1 text-[11px] font-medium text-white shadow-lg hover:bg-gray-700';
-        document.body.appendChild(redactButton);
-    }
-    redactButton.textContent = `Redact "${text.length > 24 ? text.slice(0, 24) + '…' : text}"`;
-    const rect = sel.getRangeAt(0).getBoundingClientRect();
-    redactButton.style.display = 'block';
-    redactButton.style.left = `${Math.max(8, rect.left)}px`;
-    redactButton.style.top = `${Math.max(8, rect.top - 30)}px`;
-    redactButton.onclick = async () => {
+    placeSpanAction(sel.getRangeAt(0).getBoundingClientRect(), `Redact "${ellipsize(text, 24)}"`, async () => {
         addManualRedaction(deid, key, text);
-        hideRedactButton();
+        hideSpanAction();
         window.getSelection()?.removeAllRanges();
         await save();
-    };
+    });
 }
 
 function renderEmpty(mount) {

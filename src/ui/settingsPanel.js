@@ -19,6 +19,15 @@ import { showToast } from './toast.js';
 
 const MOUNT_ID = 'settings-mount';
 
+/** Panels, in tab order. 'extraction' is dropped in OCR-only builds, where
+ *  there is no LLM to configure. */
+const TABS = [
+    { id: 'extraction', label: 'Extraction' },
+    { id: 'processing', label: 'Processing' },
+    { id: 'privacy', label: 'Privacy' },
+    { id: 'view', label: 'View' },
+];
+
 const MODE_COPY = [
     {
         id: REVIEW_MODES.MANUAL,
@@ -66,9 +75,20 @@ export async function openSettingsPanel(deps) {
                 </svg>
             </button>
         </div>
-        <div class="p-5 space-y-6 overflow-y-auto">
-            <!-- Configuration summary (LLM-only; hidden in OCR-only builds) -->
+        <div class="px-5 border-b border-gray-100">
+            <nav class="-mb-px flex gap-4" role="tablist">
+                ${TABS.filter((t) => !(t.id === 'extraction' && OCR_ONLY)).map((t, i) => `
+                <button type="button" role="tab" data-tab="${t.id}"
+                        class="sp-tab whitespace-nowrap border-b-2 py-2 px-1 text-sm font-medium ${
+                            i === 0 ? 'border-green-600 text-green-700' : 'border-transparent text-gray-500 hover:text-gray-700'}">
+                    ${t.label}
+                </button>`).join('')}
+            </nav>
+        </div>
+        <div class="p-5 overflow-y-auto min-h-[20rem]">
+            <!-- Extraction: schema / provider / model (no LLM in OCR-only builds) -->
             ${OCR_ONLY ? '' : `
+            <div class="sp-panel" data-panel="extraction">
             <section>
                 <h3 class="text-xs font-semibold uppercase tracking-wide text-gray-500">Configuration</h3>
                 <dl class="mt-2 divide-y divide-gray-100 border border-gray-200 rounded-md">
@@ -76,9 +96,11 @@ export async function openSettingsPanel(deps) {
                     ${configRowHtml('LLM provider', providerLabel, 2)}
                     ${configRowHtml('Model', status.model || '—', 3)}
                 </dl>
-            </section>`}
+            </section>
+            </div>`}
 
-            <!-- Processing mode -->
+            <!-- Processing: how much of the batch runs without stopping -->
+            <div class="sp-panel hidden" data-panel="processing">
             <section>
                 <h3 class="text-xs font-semibold uppercase tracking-wide text-gray-500">Processing</h3>
                 <p class="mt-1 text-xs text-gray-500">
@@ -114,7 +136,10 @@ export async function openSettingsPanel(deps) {
                 </div>
             </section>
 
-            <!-- De-identification -->
+            </div>
+
+            <!-- Privacy: de-identification -->
+            <div class="sp-panel hidden" data-panel="privacy">
             <section>
                 <h3 class="text-xs font-semibold uppercase tracking-wide text-gray-500">De-identification</h3>
                 <label class="mt-2 flex items-start gap-2 text-sm text-gray-800 cursor-pointer">
@@ -174,7 +199,10 @@ export async function openSettingsPanel(deps) {
                 </div>
             </section>
 
+            </div>
+
             <!-- View -->
+            <div class="sp-panel hidden" data-panel="view">
             <section>
                 <h3 class="text-xs font-semibold uppercase tracking-wide text-gray-500">View</h3>
                 <label class="mt-2 flex items-center gap-2 text-sm text-gray-800 cursor-pointer">
@@ -183,6 +211,7 @@ export async function openSettingsPanel(deps) {
                     Link scrolling between page images and OCR text
                 </label>
             </section>
+            </div>
         </div>
     </div>
 </div>`;
@@ -196,6 +225,26 @@ export async function openSettingsPanel(deps) {
     mount.querySelector('#sp-close').addEventListener('click', close);
     mount.querySelector('#sp-overlay').addEventListener('click', (e) => {
         if (e.target === mount.querySelector('#sp-overlay')) close();
+    });
+
+    // Tabs. Panels stay in the DOM (just hidden) so every control keeps its
+    // wiring and state whichever tab is showing.
+    mount.querySelectorAll('.sp-tab').forEach((tab) => {
+        tab.addEventListener('click', () => {
+            const id = tab.dataset.tab;
+            mount.querySelectorAll('.sp-tab').forEach((t) => {
+                const on = t === tab;
+                t.classList.toggle('border-green-600', on);
+                t.classList.toggle('text-green-700', on);
+                t.classList.toggle('border-transparent', !on);
+                t.classList.toggle('text-gray-500', !on);
+                t.classList.toggle('hover:text-gray-700', !on);
+                t.setAttribute('aria-selected', String(on));
+            });
+            mount.querySelectorAll('.sp-panel').forEach((p) => {
+                p.classList.toggle('hidden', p.dataset.panel !== id);
+            });
+        });
     });
 
     mount.querySelectorAll('button[data-step]').forEach((btn) => {

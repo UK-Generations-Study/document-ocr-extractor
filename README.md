@@ -135,12 +135,15 @@ How it behaves:
   and the LLM, when the extraction stage is enabled — receive that text with
   every veiled span replaced by `[REDACTED]`. (No extra exposure: the
   un-redacted page image is already on screen beside it.)
-- **Redactions are editable.** Click a veil to keep the text; it drops to a
-  dashed outline so the decision stays visible, and clicking again restores it.
-  Select any text and confirm the **Redact** button to remove something the
-  analyzer missed. **Reset** returns the page to what Presidio proposed.
-- The two tabs have distinct jobs while de-identification is on: **Redact** is
-  the review surface, **Edit** is the plain-text editor.
+- **The text stays editable and the redactions are adjustable, in the same
+  place.** Click in and type to fix an OCR error. Click inside a veil and
+  confirm **Keep this text** to un-redact it — it drops to a dashed outline, so
+  the decision stays visible, and clicking it offers **Redact this** to put it
+  back. Select any text and confirm **Redact** to remove something the analyzer
+  missed. **Reset** returns the page to what Presidio proposed.
+- On by default. It fails closed: if the Presidio service is unreachable,
+  documents stop with an error rather than passing through un-redacted, so turn
+  it off in Settings if you are running without Presidio.
 - **Automatic detection runs once**, after OCR, and is never repeated on its
   own — re-running it would resurrect redactions you dismissed and discard the
   ones you added. Editing the text therefore re-anchors the redactions you

@@ -30,10 +30,15 @@ const DEFAULTS = {
     syncScroll: true,
     lowConfThreshold: 0.6,
 
-    // De-identification (Presidio). Off by default: it requires the Presidio
-    // services to be reachable, and enabling it silently would let documents
-    // fail OCR when they aren't. See src/deid/.
-    deidEnabled: false,
+    // De-identification (Presidio). ON by default: this app is meant to handle
+    // identifiable clinical documents, so removing identifiers should be the
+    // behaviour you get without having to know to ask for it.
+    //
+    // The cost of that default: de-identification fails closed, so if the
+    // Presidio service is not reachable, documents stop at 'ocr-failed' with an
+    // explanatory error rather than quietly passing through un-redacted. Turn
+    // this off in Settings if you are running without Presidio.
+    deidEnabled: true,
     /** Same-origin base path a reverse proxy forwards to the Presidio services. */
     deidBaseUrl: '/presidio',
     /** Entity types to detect; empty array means "everything the server supports". */
