@@ -44,6 +44,17 @@
  * (this one, here), overrides.offText names a string (this text, anywhere in
  * the report).
  *
+ * A report-wide redaction can still be wrong in ONE place - the same surname
+ * belonging to a consultant rather than the patient - so it takes exceptions:
+ *
+ *   unit.spans     {except:true} the report-wide redaction does not apply
+ *                               here. Also an ordinary span, so the exception
+ *                               is pinned to its own characters and survives
+ *                               an edit; and because it is an exception rather
+ *                               than a rewrite, the redaction goes on covering
+ *                               every other occurrence, including text that
+ *                               only appears later.
+ *
  * Substitution is a local splice with a fixed `[REDACTED]` placeholder -
  * identical to what Presidio's anonymizer `replace` operator would return, but
  * without a network round-trip per field on every export.
@@ -387,7 +398,15 @@ export function effectiveSpans(deid, unit, settings = getCachedSettings()) {
 
     const enabled = [];
     const dismissed = [];
+    const exceptions = [];
     for (const s of unit.spans || []) {
+        // An exception redacts nothing itself; it says the report-wide
+        // redaction stops short of this occurrence.
+        if (s.except) {
+            exceptions.push(s);
+            dismissed.push({ ...s, source: 'except' });
+            continue;
+        }
         if (!passesFilter(s)) continue;
         const lifted = off.has(s.id) || offText.has(unit.text.slice(s.start, s.end));
         const entry = { ...s, source: s.manual ? 'instance' : 'auto' };
@@ -399,10 +418,11 @@ export function effectiveSpans(deid, unit, settings = getCachedSettings()) {
     // means DOM positions don't line up with source offsets. Matching the
     // string avoids that mapping entirely - and is what "everywhere" means.
     // The caller applies each entry to every page of the document; here it
-    // applies to every occurrence in this unit.
+    // applies to every occurrence in this unit, bar the excepted ones.
     for (const o of overrides.on || []) {
         if (!o.text) continue;
         for (const at of occurrencesOf(unit.text, o.text)) {
+            if (exceptions.some((e) => e.start < at.end && at.start < e.end)) continue;
             enabled.push({ ...at, id: o.id, entityType: MANUAL_ENTITY, score: 1, source: 'doc' });
         }
     }
@@ -533,16 +553,18 @@ function ensureOverrides(deid) {
  * extended by hand, say - and the reach of each half differs, so they are
  * reported separately rather than flattened.
  *
- * @returns {{text: string, autoIds: string[], instanceIds: string[], docTexts: string[]}}
+ * @returns {{text: string, autoIds: string[], instanceIds: string[],
+ *            exceptIds: string[], docTexts: string[]}}
  */
 export function markComposition(deid, key, start, end) {
-    const out = { text: '', autoIds: [], instanceIds: [], docTexts: [] };
+    const out = { text: '', autoIds: [], instanceIds: [], exceptIds: [], docTexts: [] };
     const unit = findUnit(deid, key);
     if (!unit) return out;
     out.text = unit.text.slice(start, end);
     for (const s of unit.spans || []) {
         if (s.start >= end || start >= s.end) continue;
-        (s.manual ? out.instanceIds : out.autoIds).push(s.id);
+        if (s.except) out.exceptIds.push(s.id);
+        else (s.manual ? out.instanceIds : out.autoIds).push(s.id);
     }
     for (const o of deid.overrides?.on || []) {
         if (!o.text) continue;
@@ -604,16 +626,52 @@ export function occurrenceIndexInPage(deid, key, start, end, text) {
 /** Redact the `index`th occurrence of `text` on this page and no other.
  *  @returns {boolean} whether that occurrence existed */
 export function redactNthOccurrenceInPage(deid, index, text) {
+    return atNthOccurrence(deid, index, text, redactInstance);
+}
+
+/** Exempt the `index`th occurrence of `text` from the report-wide redaction
+ *  that would otherwise cover it, leaving every other occurrence redacted.
+ *  @returns {boolean} whether that occurrence existed */
+export function exceptNthOccurrenceInPage(deid, index, text) {
+    return atNthOccurrence(deid, index, text, exceptInstance);
+}
+
+function atNthOccurrence(deid, index, text, place) {
     if (!text || index < 0) return false;
     let n = 0;
     for (const unit of deid.units || []) {
         for (const at of occurrencesOf(unit.text, text)) {
             if (n++ !== index) continue;
-            redactInstance(deid, unitKey(unit.blockIndex, unit.path), at.start, at.end);
+            place(deid, unitKey(unit.blockIndex, unit.path), at.start, at.end);
             return true;
         }
     }
     return false;
+}
+
+/** Exempt one occurrence from the report-wide redaction covering it. */
+function exceptInstance(deid, key, start, end) {
+    const unit = findUnit(deid, key);
+    if (!unit || end <= start) return deid;
+    const already = (unit.spans || []).some((s) => s.except && s.start === start && s.end === end);
+    if (already) return deid;
+    unit.spans = [...(unit.spans || []), {
+        id: newId(), start, end, entityType: MANUAL_ENTITY, score: 1, except: true,
+    }];
+    unit.spans.sort((a, b) => a.start - b.start || a.end - b.end);
+    return deid;
+}
+
+/** Withdraw exceptions, putting those occurrences back under the report-wide
+ *  redaction. Deleted rather than remembered: an exception exists only because
+ *  it was asked for, so there is nothing left to show once it is taken back. */
+export function unexceptSpans(deid, ids) {
+    const wanted = new Set(ids || []);
+    if (!wanted.size) return deid;
+    for (const unit of deid.units || []) {
+        unit.spans = (unit.spans || []).filter((s) => !(s.except && wanted.has(s.id)));
+    }
+    return deid;
 }
 
 /** Redact a string everywhere in the report - the caller replays this onto
@@ -623,6 +681,13 @@ export function addManualRedaction(deid, text) {
     if (!value) return deid;
     const overrides = ensureOverrides(deid);
     overrides.offText = overrides.offText.filter((o) => o.text !== value);
+    // Asking for this string everywhere is a later, more explicit instruction
+    // than any exception carved out of a previous "everywhere" - so the
+    // exceptions go, rather than quietly surviving to punch holes in it.
+    for (const unit of deid.units || []) {
+        unit.spans = (unit.spans || [])
+            .filter((s) => !(s.except && unit.text.slice(s.start, s.end) === value));
+    }
     if (!overrides.on.some((o) => o.text === value)) overrides.on.push({ id: newId(), text: value });
     return deid;
 }
@@ -647,7 +712,7 @@ export function dismissSpans(deid, ids) {
     for (const unit of deid.units || []) {
         for (const s of unit.spans || []) {
             if (!wanted.has(s.id)) continue;
-            if (s.manual) continue;
+            if (s.manual || s.except) continue;   // withdrawn, not dissented from
             if (!overrides.off.some((o) => o.id === s.id)) overrides.off.push({ id: s.id });
         }
         unit.spans = (unit.spans || []).filter((s) => !(s.manual && wanted.has(s.id)));
@@ -690,7 +755,7 @@ export function restoreTextEverywhere(deid, text) {
 export function resetOverrides(deid) {
     deid.overrides = { off: [], offText: [], on: [] };
     for (const unit of deid.units || []) {
-        unit.spans = (unit.spans || []).filter((s) => !s.manual);
+        unit.spans = (unit.spans || []).filter((s) => !s.manual && !s.except);
     }
     return deid;
 }
@@ -701,7 +766,7 @@ export function hasOverrides(deid) {
     if (!d) return false;
     const o = d.overrides;
     if (o.off.length || o.offText.length || o.on.length) return true;
-    return d.units.some((u) => (u.spans || []).some((s) => s.manual));
+    return d.units.some((u) => (u.spans || []).some((s) => s.manual || s.except));
 }
 
 /** Whether a string appears in any analyzed unit of this page. A selection can

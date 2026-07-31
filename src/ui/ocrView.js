@@ -32,6 +32,7 @@ import {
     countOccurrences,
     dismissSpans,
     dismissTextEverywhere,
+    exceptNthOccurrenceInPage,
     hasOverrides,
     markComposition,
     normalizeDeid,
@@ -45,6 +46,7 @@ import {
     restoreSpans,
     restoreTextEverywhere,
     textOccursInPage,
+    unexceptSpans,
 } from '../deid/deidentify.js';
 import { decorateMarks, markPageText } from '../deid/marks.js';
 import { confirmOcr } from './reviewFlow.js';
@@ -235,6 +237,19 @@ async function renderFor(docId, { force } = {}) {
         await setDocumentStatus(docId, 'ocr-done', { extractions: [], extractedAt: null, lastError: null });
         renderFor(docId, { force: true });
     });
+    mount.querySelector('#ov-reset')?.addEventListener('click', async () => {
+        const ok = await confirmDialog({
+            title: 'Reset this report',
+            bodyHtml: 'Discards your text edits <em>and</em> your redaction changes on every page, back to what was read and detected automatically. The report itself is kept.',
+            confirmLabel: 'Reset',
+            danger: true,
+        });
+        if (!ok) return;
+        for (const rec of await getOcrPagesByDoc(docId)) {
+            await putOcrPage(resetPageRecord(rec));
+        }
+        await renderFor(docId, { force: true });
+    });
     mount.querySelector('#ov-retry')?.addEventListener('click', async () => {
         await setDocumentStatus(docId, 'queued', { lastError: null });
         renderFor(docId, { force: true });
@@ -277,7 +292,8 @@ function headerHtml(doc, ocrByKey) {
     class="rounded-md bg-green-800 px-3 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-green-700">
     Confirm text
 </button>
-${deepButtonHtml(anyDeep, deep)}`;
+${deepButtonHtml(anyDeep, deep)}
+${resetButtonHtml(ocrByKey)}`;
             break;
         case 'ocr-failed':
             statusLine = `<span class="text-red-700" title="${escapeAttr(doc.lastError || '')}">OCR failed${doc.lastError ? `: ${escapeHtml(truncate(doc.lastError, 90))}` : ''}</span>`;
@@ -320,6 +336,40 @@ ${deepButtonHtml(anyDeep, deep)}`;
     </div>
     <div class="shrink-0">${paneTabsHtml(doc, 'ocr')}</div>
 </div>`;
+}
+
+/**
+ * Undo everything the abstractor has done to this report - text edits and
+ * redaction decisions alike.
+ *
+ * One button for both, because from the reader's side they are one thing: the
+ * changes they made to this report. Offered only when there is something to
+ * undo, so it cannot be mistaken for an action that does something else.
+ */
+function resetButtonHtml(ocrByKey) {
+    return `
+<button id="ov-reset" type="button"
+    title="Discard your edits and redaction changes across this report, back to what was read and detected automatically"
+    class="rounded-md border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 ${anythingToReset(Array.from(ocrByKey.values())) ? '' : 'hidden'}">
+    Reset
+</button>`;
+}
+
+/** The snapshot outlives a reset, so that a second one still works - which
+ *  means its mere presence says nothing. What counts is whether the page still
+ *  differs from it. */
+const anythingToReset = (ocrPages) => ocrPages.some((rec) =>
+    (rec.original && rec.original.markdown !== rec.markdown) || hasOverrides(rec.deid));
+
+/**
+ * Show Reset exactly when there is something to reset.
+ *
+ * Redacting and editing go through a card refresh, which deliberately leaves
+ * the header alone - so the header would otherwise still be describing the
+ * report as untouched long after the first change to it.
+ */
+function syncResetButton(ocrPages) {
+    document.getElementById('ov-reset')?.classList.toggle('hidden', !anythingToReset(ocrPages));
 }
 
 function deepButtonHtml(anyDeep, st) {
@@ -407,6 +457,7 @@ async function refreshAllCards(doc) {
     if (currentDocId !== doc.id) return;
     const ocrByKey = new Map(ocrPages.map((r) => [r.pageBlobKey, r]));
     const counts = reportWideCounts(ocrPages);
+    syncResetButton(ocrPages);
 
     const pages = doc.pages || [];
     const cards = [...pagesRoot.children];
@@ -482,10 +533,6 @@ function pageSectionEl(doc, pageIndex, page, ocr, restore = {}, reportCounts = n
         ? `<span class="ml-2 inline-flex items-center rounded bg-gray-900 text-gray-50 px-1.5 py-0.5 text-[10px]"
                  title="${escapeAttr(redacted ? `${summaryText} — replaced with [REDACTED] on export` : 'Nothing detected on this page')}">${redacted} redacted</span>`
         : '';
-    const resetBtn = deid && hasOverrides(deid)
-        ? `<button type="button" class="ov-deid-reset px-2 py-0.5 text-[11px] font-medium rounded ring-1 ring-gray-200 text-gray-600 hover:bg-gray-50"
-                   title="Discard your redaction changes on this page and go back to what was detected automatically">Reset</button>`
-        : '';
 
     const readonly = ['ocr-confirmed', 'extraction-running', 'extraction-done', 'confirmed', 'exported'].includes(doc.status);
     // Rendered view: marked-up original when redacting, plain text otherwise.
@@ -502,7 +549,6 @@ function pageSectionEl(doc, pageIndex, page, ocr, restore = {}, reportCounts = n
 <div class="h-8 flex items-center justify-between px-3 border-b border-gray-100 text-xs text-gray-600">
     <div>Page ${pageIndex + 1}${sourceBadge}${lowConfBadge}${deidBadge}</div>
     <div class="flex items-center gap-2">
-        ${resetBtn}
         <div class="ov-toggle inline-flex rounded-md ring-1 ring-gray-200 overflow-hidden" role="group">
             <button type="button" data-mode="rendered" class="ov-mode px-2 py-0.5 text-[11px] font-medium"
                     title="${deid ? 'Formatted view - edit the text, and select it to redact' : 'Formatted view - editable'}">Rendered</button>
@@ -601,7 +647,27 @@ function pageSectionEl(doc, pageIndex, page, ocr, restore = {}, reportCounts = n
         stageMs: ocr?.stageMs || {},
         totalMs: ocr?.totalMs || 0,
         updatedAt: Date.now(),
+        original: ocr?.original,
     });
+
+    /**
+     * Remember what OCR produced, once, before the first edit overwrites it.
+     *
+     * An edit replaces `markdown` outright and collapses the per-field units it
+     * was analyzed as, so without this the machine's own reading of the page is
+     * gone for good and Reset would have nothing to go back to. Taken here
+     * rather than in the OCR pipeline so no page written before today is left
+     * without one - and only once, so a second edit cannot overwrite the
+     * snapshot with already-edited text.
+     */
+    const rememberOriginal = () => {
+        if (ocr.original) return;
+        ocr.original = {
+            markdown: originalText,
+            deid: deid ? structuredClone(deid) : null,
+            source: ocr.source || 'quick',
+        };
+    };
 
     /** Rebuild just this card in place, so a redaction change doesn't reset
      *  the scroll position of the whole pane. The active tab and the body's
@@ -619,8 +685,10 @@ function pageSectionEl(doc, pageIndex, page, ocr, restore = {}, reportCounts = n
         // report-wide redaction, but editing this page's TEXT changes how many
         // times an existing one occurs - which is exactly what decides whether
         // its veils are marked as reaching across the report.
-        const counts = reportWideCounts(await getOcrPagesByDoc(doc.id));
+        const ocrPages = await getOcrPagesByDoc(doc.id);
+        const counts = reportWideCounts(ocrPages);
         if (!wrap.isConnected) return;   // a full re-render got there first
+        syncResetButton(ocrPages);
         // Whether a string reaches beyond one place is a fact about the report,
         // so when the answer changes it changes on every page at once. Rebuild
         // them all rather than leave the same string marked here and unmarked
@@ -671,6 +739,7 @@ function pageSectionEl(doc, pageIndex, page, ocr, restore = {}, reportCounts = n
         } else {
             // Fold the edit and the redaction change into one write: carry the
             // (already-updated) redactions across onto the edited text.
+            rememberOriginal();
             const next = reanchorAfterEdit(ocr, deid, edited);
             ocr.markdown = edited;
             ocr.deid = next;
@@ -723,10 +792,12 @@ function pageSectionEl(doc, pageIndex, page, ocr, restore = {}, reportCounts = n
      *  the pre-edit text over a correctly-saved edit. */
     const persistEditedText = async (nextText) => {
         if (!deid) {
+            rememberOriginal();
             ocr.markdown = nextText;
             await putOcrPage({ ...baseRecord(), markdown: nextText, source: 'edit' });
             return;
         }
+        rememberOriginal();
         const next = reanchorAfterEdit(ocr, deid, nextText);
         ocr.markdown = nextText;
         ocr.deid = next;
@@ -817,9 +888,46 @@ function pageSectionEl(doc, pageIndex, page, ocr, restore = {}, reportCounts = n
                 });
             },
 
+            /**
+             * Keep this one occurrence, leaving the report-wide redaction in
+             * force everywhere else. Page-local: an exception is a fact about
+             * one place, so no other page needs rewriting.
+             *
+             * Pinned to an occurrence index before anything is written, because
+             * the write itself can re-flow the page when there is an unsaved
+             * edit to flush.
+             */
+            exceptHere: async (mark) => {
+                const index = occurrenceIndexInPage(deid, mark.key, mark.start, mark.end, mark.text);
+                if (index < 0 || !exceptNthOccurrenceInPage(deid, index, mark.text)) {
+                    showToast(
+                        'Could not pin that to a single place, so it is still redacted everywhere.',
+                        { tone: 'error', duration: 9000 },
+                    );
+                    return;
+                }
+                // The same veil can be an automatic detection as well; leaving
+                // that half in force would make the click appear to do nothing.
+                const parts = markComposition(deid, mark.key, mark.start, mark.end);
+                dismissSpans(deid, [...parts.autoIds, ...parts.instanceIds]);
+                await saveDeid();
+            },
+
+            /** Put an excepted occurrence back under the report-wide redaction. */
+            unexceptMark: async (mark) => {
+                unexceptSpans(deid, mark.ids);
+                await saveDeid();
+            },
+
             /** Stop redacting this string anywhere in the report. */
             liftEverywhere: async (mark) => {
-                await applyAcrossDoc((d) => dismissTextEverywhere(d, mark.text));
+                const parts = markComposition(deid, mark.key, mark.start, mark.end);
+                await applyAcrossDoc((d) => {
+                    for (const text of parts.docTexts) removeManualRedaction(d, text);
+                    // A detection dismissed report-wide needs the text-anchored
+                    // record; a manual redaction just goes away with its entry.
+                    if (parts.autoIds.length) dismissTextEverywhere(d, mark.text);
+                });
             },
 
             /** Put a dismissed span back into effect - here, or everywhere if
@@ -830,24 +938,6 @@ function pageSectionEl(doc, pageIndex, page, ocr, restore = {}, reportCounts = n
                 restoreSpans(deid, mark.ids);
                 if (!liftedEverywhere) { await saveDeid(); return; }
                 await applyAcrossDoc((d) => restoreTextEverywhere(d, mark.text));
-            },
-
-            /** Narrow a report-wide redaction to the one place it was clicked.
-             *  Pinned down before anything is written, because the write itself
-             *  can re-flow the page when there is an unsaved edit to flush. */
-            narrowToHere: async (mark) => {
-                const index = occurrenceIndexInPage(deid, mark.key, mark.start, mark.end, mark.text);
-                if (index < 0) {
-                    showToast(
-                        'Could not pin that redaction to a single place, so it is still redacted everywhere.',
-                        { tone: 'error', duration: 9000 },
-                    );
-                    return;
-                }
-                await applyAcrossDoc((d, here) => {
-                    if (here) redactNthOccurrenceInPage(d, index, mark.text);
-                    removeManualRedaction(d, mark.text);
-                });
             },
 
             /** Widen a one-off redaction to the whole report. */
@@ -868,14 +958,36 @@ function pageSectionEl(doc, pageIndex, page, ocr, restore = {}, reportCounts = n
             });
             pane.addEventListener('keyup', hideSpanAction);
         }
-
-        wrap.querySelector('.ov-deid-reset')?.addEventListener('click', async () => {
-            resetOverrides(deid);
-            await saveDeid();
-        });
     }
 
     return wrap;
+}
+
+/**
+ * Put one page back to what the machine produced: the text OCR read, and the
+ * redactions Presidio proposed, with every human change on top of both
+ * discarded. `original` is only present once a page has been edited - before
+ * that the stored text IS the original.
+ *
+ * The snapshot is cloned rather than handed over, so resetting twice works and
+ * the second reset does not find its source already stripped.
+ */
+function resetPageRecord(rec) {
+    const next = { ...rec };
+    const snap = rec.original;
+    if (snap) {
+        next.markdown = snap.markdown;
+        next.deid = snap.deid ? structuredClone(snap.deid) : null;
+        next.source = snap.source || 'quick';
+    } else if (next.deid) {
+        next.deid = structuredClone(next.deid);
+    }
+    // The snapshot can carry redaction decisions of its own - it is taken at
+    // the first edit, which may come after a redaction - so clear them here
+    // rather than trusting it to be pristine.
+    if (next.deid) resetOverrides(next.deid);
+    next.updatedAt = Date.now();
+    return next;
 }
 
 // ---------------------------------------------------------------- manual redaction
@@ -999,11 +1111,28 @@ async function showSpanAction(pane, marks, handlers) {
     placeSpanActions(rect, veilActions(mark, total, handlers));
 }
 
-/** The two ways of acting on an existing veil, matched to how it was made. */
+/**
+ * The two ways of acting on an existing veil, matched to how it was made.
+ *
+ * The primary always acts HERE and the second always acts across the report,
+ * whatever the veil is - so the obvious button is never the far-reaching one.
+ * A report-wide redaction reads no differently: clicking its fifth occurrence
+ * offers to keep that one, not to undo all five.
+ */
 function veilActions(mark, total, handlers) {
     const many = total > 1;
     const also = (label, title, run) => (many ? [{ label, title, run }] : []);
 
+    // An occurrence already kept out of a report-wide redaction: the only
+    // move left is to put it back under one, and "everywhere" is where it
+    // already applies.
+    if (mark.sources?.includes('except')) {
+        return [{
+            label: 'Redact',
+            title: 'Redact this occurrence too, like the rest of the report',
+            run: () => handlers.unexceptMark(mark),
+        }];
+    }
     if (mark.kind === 'off') {
         return [
             { label: 'Redact', title: 'Redact this occurrence after all', run: () => handlers.restoreMark(mark) },
@@ -1012,10 +1141,18 @@ function veilActions(mark, total, handlers) {
         ];
     }
     if (mark.sources?.includes('doc')) {
+        // With nowhere else for the redaction to apply, keeping this one is the
+        // same as withdrawing it - so do that, and leave nothing behind.
+        if (!many) {
+            return [{
+                label: 'Unredact',
+                title: 'Stop redacting this text',
+                run: () => handlers.liftEverywhere(mark),
+            }];
+        }
         return [
-            { label: 'Unredact', title: 'Stop redacting this string anywhere in the report', run: () => handlers.liftMark(mark) },
-            ...also('Only here', 'Keep redacting this one, and stop redacting the others',
-                () => handlers.narrowToHere(mark)),
+            { label: 'Unredact', title: 'Keep this occurrence; the rest of the report stays redacted', run: () => handlers.exceptHere(mark) },
+            { label: `Unredact all ${total}`, title: `Stop redacting "${mark.text}" anywhere in this report`, run: () => handlers.liftEverywhere(mark) },
         ];
     }
     if (mark.sources?.includes('instance')) {

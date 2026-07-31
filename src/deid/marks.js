@@ -156,7 +156,14 @@ export function decorateMarks(root, marks) {
     stripStraySentinels(root);
 }
 
+const isException = (mark) => !!mark?.sources?.includes('except');
+
 function markClass(mark) {
+    // An exception carries the report-wide colour without the fill: the string
+    // IS redacted across the report, and deliberately is not here. The dashed
+    // outline is not reused for it - that means one thing only, a detection the
+    // abstractor judged not to be personal information.
+    if (isException(mark)) return 'ov-redaction ov-redaction--except';
     if (mark?.kind === 'off') return 'ov-redaction ov-redaction--off';
     // Marked because its reach is the surprising part: a veil that carries no
     // marker affects only the text under it.
@@ -165,6 +172,7 @@ function markClass(mark) {
 
 function markTitle(mark) {
     const types = (mark.entityTypes || []).join(', ');
+    if (isException(mark)) return `${types} - redacted elsewhere in this report, kept here. Click to change.`;
     if (mark.kind === 'off') return `${types} - not being redacted. Click to change.`;
     if (mark.spansReport) return `${types} - redacted everywhere in this report. Click to change.`;
     // A hand-placed redaction that reaches no further than this one occurrence,
