@@ -907,10 +907,24 @@ function pageSectionEl(doc, pageIndex, page, ocr, restore = {}, reportCounts = n
 
                 // Pressing Enter at a veil's edge splits the block around the
                 // caret, and the browser carries the veil into BOTH halves -
-                // leaving an empty copy in the new line. It covers nothing, so
-                // whatever is typed into it next would come out looking
-                // redacted when it is not.
-                if (!el.textContent) { el.remove(); continue; }
+                // leaving a copy in the new line with no text in it. It covers
+                // nothing, so whatever is typed there next would come out
+                // looking redacted when it is not.
+                if (!el.textContent) {
+                    const sel = window.getSelection();
+                    const hadCaret = !!sel?.anchorNode && el.contains(sel.anchorNode);
+                    const block = el.parentElement;
+                    // Unwrapped rather than deleted: the split leaves its line
+                    // break INSIDE the copy, and taking that away with it left
+                    // a block with nothing in it at all - nowhere to put the
+                    // caret, no height, and Enter looking like it did nothing.
+                    unwrap(el);
+                    if (hadCaret && block && !block.textContent && !block.querySelector('br')) {
+                        block.appendChild(document.createElement('br'));
+                        placeCaret(block, 0);
+                    }
+                    continue;
+                }
 
                 // Anything but plain text inside means the edit restructured
                 // the element rather than added to it. Rather than reason about
@@ -1182,7 +1196,8 @@ function unwrap(el) {
     }
 }
 
-/** Drop the caret at a point in a text node, discarding any selection. */
+/** Drop the caret at a point in a node, discarding any selection. The node may
+ *  be text (offset in characters) or an element (offset in child nodes). */
 function placeCaret(node, offset) {
     const range = document.createRange();
     range.setStart(node, offset);
