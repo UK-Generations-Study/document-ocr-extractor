@@ -244,6 +244,11 @@ function wrapMarkedText(root, byId) {
             const el = document.createElement('span');
             el.className = markClass(mark);
             el.dataset.markId = openId;
+            // The words THIS element was drawn over, which is not the whole
+            // redaction when one spans several blocks. The pane compares
+            // against it to notice when editing has moved text into or out of
+            // a veil (see detachTypedText).
+            el.dataset.veilText = token.value;
             el.textContent = token.value;
             if (mark) el.title = markTitle(mark);
             frag.appendChild(el);

@@ -127,6 +127,14 @@ export function initOcrView() {
     // It is position-fixed, so a scroll would leave it pointing at nothing.
     document.getElementById(MOUNT_ID)?.addEventListener('scroll', hideSpanAction, { passive: true });
 
+    // Hovering any part of a redaction lifts the whole of it. Delegated from
+    // the mount so it survives the card rebuilds that follow every change.
+    document.getElementById(MOUNT_ID)?.addEventListener('mouseover', (ev) => {
+        const el = ev.target instanceof Element ? ev.target.closest('.ov-redaction') : null;
+        highlightWholeMark(el);
+    });
+    document.getElementById(MOUNT_ID)?.addEventListener('mouseleave', () => highlightWholeMark(null));
+
     // Deferred renders fire once the user tabs/clicks out of the editor they
     // were in. The small delay lets the editor's own blur-persist commit to
     // IndexedDB before we re-read it.
@@ -140,6 +148,27 @@ export function initOcrView() {
             if (currentDocId) renderFor(currentDocId, { force: true });
         }, 200);
     });
+}
+
+/** Elements currently lit up together, so they can be put back. */
+let hoveredVeil = [];
+
+/**
+ * Light up every element of the redaction under the pointer.
+ *
+ * A redaction covering several blocks is several elements, and a click acts on
+ * all of them - so hovering has to show all of them, or the pane would suggest
+ * each line was a redaction of its own. Scoped to the card the pointer is in:
+ * mark ids number the redactions within a page, so the same id on another page
+ * means something else entirely.
+ */
+function highlightWholeMark(el) {
+    for (const node of hoveredVeil) node.classList.remove('ov-redaction--hover');
+    hoveredVeil = [];
+    const card = el?.closest('[data-page-index]');
+    if (!el || !card) return;
+    hoveredVeil = [...card.querySelectorAll(`.ov-redaction[data-mark-id="${el.dataset.markId}"]`)];
+    for (const node of hoveredVeil) node.classList.add('ov-redaction--hover');
 }
 
 function paneHasFocusedEditor(mount) {
@@ -867,27 +896,48 @@ function pageSectionEl(doc, pageIndex, page, ocr, restore = {}, reportCounts = n
          */
         const detachTypedText = (root) => {
             for (const el of root.querySelectorAll('.ov-redaction')) {
-                const mark = marked.marks[Number(el.dataset.markId)];
-                if (!mark || el.textContent === mark.text) continue;
+                // Compared against what THIS element was drawn over, not the
+                // redaction as a whole: one spanning several blocks is several
+                // elements, each holding its own piece.
+                const was = el.dataset.veilText;
+                if (was === undefined) continue;
                 el.normalize();
                 const node = el.firstChild;
-                if (el.childNodes.length !== 1 || node?.nodeType !== Node.TEXT_NODE) continue;
+                if (node?.data === was && el.childNodes.length === 1) continue;
+
+                // Pressing Enter at a veil's edge splits the block around the
+                // caret, and the browser carries the veil into BOTH halves -
+                // leaving an empty copy in the new line. It covers nothing, so
+                // whatever is typed into it next would come out looking
+                // redacted when it is not.
+                if (!el.textContent) { el.remove(); continue; }
+
+                // Anything but plain text inside means the edit restructured
+                // the element rather than added to it. Rather than reason about
+                // it, give up the decoration: the save re-derives the veil, and
+                // until then nothing claims to be redacted that is not.
+                if (el.childNodes.length !== 1 || node.nodeType !== Node.TEXT_NODE) {
+                    unwrap(el);
+                    continue;
+                }
+
                 // Moving the caret is only right if it is the thing that put
                 // the text there; a redraw elsewhere must not steal it.
                 const typing = el.contains(window.getSelection()?.anchorNode);
-                if (node.data.startsWith(mark.text)) {
-                    const tail = document.createTextNode(node.data.slice(mark.text.length));
-                    node.data = mark.text;
+                if (node.data.startsWith(was)) {
+                    const tail = document.createTextNode(node.data.slice(was.length));
+                    node.data = was;
                     el.after(tail);
                     if (typing) placeCaret(tail, tail.length);
-                } else if (node.data.endsWith(mark.text)) {
-                    const head = document.createTextNode(
-                        node.data.slice(0, node.data.length - mark.text.length),
-                    );
-                    node.data = mark.text;
+                } else if (node.data.endsWith(was)) {
+                    const head = document.createTextNode(node.data.slice(0, node.data.length - was.length));
+                    node.data = was;
                     el.before(head);
                     if (typing) placeCaret(head, head.length);
                 }
+                // Otherwise the redacted words themselves are being edited. The
+                // span grows to cover the change on save (see mapSpan), so the
+                // veil is left where it is and already shows that.
             }
         };
 
@@ -1111,6 +1161,26 @@ function resetPageRecord(rec) {
 }
 
 // ---------------------------------------------------------------- manual redaction
+
+/**
+ * Replace an element with its own children, keeping the caret where it was.
+ *
+ * replaceWith detaches the element BEFORE inserting them, and removing the node
+ * a caret sits in collapses the selection to the parent at that index - which
+ * reads as the cursor jumping backwards past the words just typed. The child
+ * nodes are moved rather than copied, so the one the caret is in survives and
+ * can simply be pointed at again.
+ */
+function unwrap(el) {
+    const sel = window.getSelection();
+    const node = sel?.anchorNode;
+    const offset = sel?.anchorOffset ?? 0;
+    const held = node && el.contains(node) ? node : null;
+    el.replaceWith(...el.childNodes);
+    if (held?.isConnected && held.nodeType === Node.TEXT_NODE) {
+        placeCaret(held, Math.min(offset, held.data.length));
+    }
+}
 
 /** Drop the caret at a point in a text node, discarding any selection. */
 function placeCaret(node, offset) {

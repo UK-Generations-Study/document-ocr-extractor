@@ -30,7 +30,11 @@
     cursor: pointer;
     transition: background 120ms ease, color 120ms ease;
 }
-.ov-redaction:hover { background: rgb(17 24 39 / 0.28); color: inherit; }
+/* Lifting the veil to read what is under it is driven from script, not :hover,
+   because a redaction covering several blocks is several elements - and
+   lighting up only the line the pointer happens to be on would say they were
+   separate redactions, when a click acts on all of them at once. */
+.ov-redaction--hover { background: rgb(17 24 39 / 0.28); color: inherit; }
 
 /* The three states below are independent and combine freely - the same words
    can be a detection the abstractor overruled AND one occurrence held out of a
@@ -44,7 +48,7 @@
     color: inherit;
     box-shadow: inset 0 -1px 0 0 rgb(107 114 128 / 0.9);
 }
-.ov-redaction--off:hover { background: rgb(17 24 39 / 0.12); }
+.ov-redaction--off.ov-redaction--hover { background: rgb(17 24 39 / 0.12); }
 
 /* ...and Presidio had detected it. The dashed outline means this and only
    this: a machine detection the abstractor judged not to be personal
@@ -64,4 +68,4 @@
 .ov-redaction--doc {
     box-shadow: inset 0 -2px 0 0 rgb(253 224 71 / 0.85);
 }
-.ov-redaction--doc:hover { box-shadow: inset 0 -2px 0 0 rgb(202 138 4 / 0.85); }
+.ov-redaction--doc.ov-redaction--hover { box-shadow: inset 0 -2px 0 0 rgb(202 138 4 / 0.85); }
