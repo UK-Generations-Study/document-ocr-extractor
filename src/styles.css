@@ -32,6 +32,18 @@
 }
 .ov-redaction:hover { background: rgb(17 24 39 / 0.28); color: inherit; }
 
+/* A redaction that reaches beyond the text under it - the same string is
+   redacted elsewhere in the report too, so lifting it here lifts it there as
+   well. Marked because that reach is the surprising part: an unmarked veil
+   covers only the words it sits on. Applied only when the string really does
+   occur more than once (see markPageText); marking a redaction that happens to
+   have nowhere else to reach would warn about a consequence that cannot
+   happen, on most manual redactions, which is how a marker stops being read. */
+.ov-redaction--doc {
+    box-shadow: inset 0 -2px 0 0 rgb(253 224 71 / 0.85);
+}
+.ov-redaction--doc:hover { box-shadow: inset 0 -2px 0 0 rgb(202 138 4 / 0.85); }
+
 /* An auto-detected span the user dismissed: not redacted, but still shown so
    the decision is visible rather than silent. Click to redact it again. */
 .ov-redaction--off {

@@ -22,7 +22,7 @@
 import {
     buildPageText,
     effectiveSpans,
-    isCurrentSchema,
+    normalizeDeid,
     unitKey,
 } from './deidentify.js';
 
@@ -45,14 +45,22 @@ const UNIT_RX = /([^]*)([\s\S]*?)/;
  * Build the Markdown to display, with sentinels around each unit and each
  * redaction span.
  *
- * @returns {{markdown: string, marks: Array<{id, key, start, end, kind, entityTypes, score}>}}
- *   `kind` is 'on' for spans that will be redacted, 'off' for auto-detected
+ * @param {Map<string, number>} [reportCounts]  how many times each report-wide
+ *   redaction's text actually occurs in the whole report. A redaction is only
+ *   worth marking as far-reaching if there is somewhere else for it to reach:
+ *   stored reach and observable reach differ when a string happens to appear
+ *   just once, and it is the observable one the reader needs.
+ *
+ * @returns {{markdown: string, marks: Array<object>}}
+ *   Each mark carries `kind` - 'on' for spans that will be redacted, 'off' for
  *   spans the user has dismissed (shown as a faint outline so a dismissal is
- *   visible rather than silent).
+ *   visible rather than silent) - along with the `sources` and `ids` that went
+ *   into it and the `text` it covers, which is what the pane needs to offer
+ *   actions whose reach matches how the redaction was made.
  */
-export function markPageText(ocrPage) {
-    const deid = ocrPage?.deid;
-    if (!isCurrentSchema(deid)) return { markdown: ocrPage?.markdown || '', marks: [] };
+export function markPageText(ocrPage, reportCounts) {
+    const deid = normalizeDeid(ocrPage?.deid);
+    if (!deid) return { markdown: ocrPage?.markdown || '', marks: [] };
 
     const marks = [];
     const markdown = buildPageText(ocrPage, (unit, settings) => {
@@ -71,6 +79,7 @@ export function markPageText(ocrPage) {
         let pos = 0;
         for (const span of spans) {
             const id = marks.length;
+            const text = unit.text.slice(span.start, span.end);
             marks.push({
                 id,
                 key,
@@ -78,6 +87,15 @@ export function markPageText(ocrPage) {
                 end: span.end,
                 kind: span.kind,
                 entityTypes: span.entityTypes,
+                sources: span.sources,
+                ids: span.ids,
+                text,
+                // Reach worth pointing out: stored as report-wide AND with
+                // somewhere else in the report to reach. A string that occurs
+                // once behaves identically however it was stored, so calling
+                // it out would describe a difference the reader cannot act on.
+                spansReport: !!span.sources?.includes('doc')
+                    && (reportCounts?.get(text) ?? 0) > 1,
                 score: span.score,
             });
             body += unit.text.slice(pos, span.start);
@@ -126,21 +144,37 @@ export function decorateMarks(root, marks) {
     replaceInTextNodes(root, MARK_RX, (m) => {
         const mark = byId.get(m[1]);
         const el = document.createElement('span');
-        el.className = mark?.kind === 'off' ? 'ov-redaction ov-redaction--off' : 'ov-redaction';
+        el.className = markClass(mark);
         el.dataset.markId = m[1];
         el.textContent = m[2];
-        if (mark) {
-            const types = (mark.entityTypes || []).join(', ');
-            el.title = mark.kind === 'off'
-                ? `${types} - dismissed, will NOT be redacted. Click to restore.`
-                : `${types}${typeof mark.score === 'number' ? ` (${Math.round(mark.score * 100)}%)` : ''} - will be redacted on export. Click to keep it.`;
-        }
+        if (mark) el.title = markTitle(mark);
         return el;
     });
 
     // A marker whose text Markdown split across elements never matched; clear
     // its remains so nothing odd shows up.
     stripStraySentinels(root);
+}
+
+function markClass(mark) {
+    if (mark?.kind === 'off') return 'ov-redaction ov-redaction--off';
+    // Marked because its reach is the surprising part: a veil that carries no
+    // marker affects only the text under it.
+    return mark?.spansReport ? 'ov-redaction ov-redaction--doc' : 'ov-redaction';
+}
+
+function markTitle(mark) {
+    const types = (mark.entityTypes || []).join(', ');
+    if (mark.kind === 'off') return `${types} - not being redacted. Click to change.`;
+    if (mark.spansReport) return `${types} - redacted everywhere in this report. Click to change.`;
+    // A hand-placed redaction that reaches no further than this one occurrence,
+    // whether because it was scoped that way or because there is nothing else
+    // to reach. Either way there is one place, and one thing a click can do.
+    if (mark.sources?.some((s) => s === 'doc' || s === 'instance')) {
+        return `${types} - redacted. Click to change.`;
+    }
+    const score = typeof mark.score === 'number' ? ` (${Math.round(mark.score * 100)}%)` : '';
+    return `${types}${score} - will be redacted on export. Click to change.`;
 }
 
 /**

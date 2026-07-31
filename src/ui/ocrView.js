@@ -29,16 +29,21 @@ import { setDocumentStatus } from '../core/status.js';
 import { attentionRegions } from '../ocr/confidence.js';
 import {
     addManualRedaction,
-    dismissRange,
+    countOccurrences,
+    dismissSpans,
+    dismissTextEverywhere,
     hasOverrides,
-    isCurrentSchema,
-    manualTextsInRange,
+    markComposition,
+    normalizeDeid,
+    occurrenceIndexInPage,
     reanchorAfterEdit,
     pageOutputText,
+    redactNthOccurrenceInPage,
     redactionSummary,
     removeManualRedaction,
     resetOverrides,
-    restoreRange,
+    restoreSpans,
+    restoreTextEverywhere,
     textOccursInPage,
 } from '../deid/deidentify.js';
 import { decorateMarks, markPageText } from '../deid/marks.js';
@@ -106,12 +111,12 @@ export function initOcrView() {
         }
     });
 
-    // Any click elsewhere dismisses the floating redaction action; the panes'
-    // own mouseup re-offers it when the new caret or selection warrants one.
-    // The button itself is excluded - hiding it here would remove it before
-    // its click could fire.
+    // Any click elsewhere dismisses the floating redaction actions; the panes'
+    // own mouseup re-offers them when the new caret or selection warrants it.
+    // The bar itself is excluded - hiding it here would remove it before its
+    // click could fire.
     document.addEventListener('mousedown', (ev) => {
-        if (ev.target !== spanActionButton) hideSpanAction();
+        if (!spanActionBar?.contains(ev.target)) hideSpanAction();
     });
     // It is position-fixed, so a scroll would leave it pointing at nothing.
     document.getElementById(MOUNT_ID)?.addEventListener('scroll', hideSpanAction, { passive: true });
@@ -164,6 +169,13 @@ export function releaseOcrPane() {
 
 async function renderFor(docId, { force } = {}) {
     if (!force && docId === currentDocId) return;
+    // Redrawing the SAME report keeps the reader where they were. Rebuilding
+    // the pane resets its scroll, which is right when a different report is
+    // being shown and wrong every other time - redacting something on page
+    // four should not throw you back to page one, and neither should an OCR
+    // progress event landing while you read.
+    const sameDoc = !!docId && docId === currentDocId;
+    const keepScroll = sameDoc ? (document.getElementById(MOUNT_ID)?.scrollTop ?? 0) : 0;
     currentDocId = docId || null;
     const mount = document.getElementById(MOUNT_ID);
     if (!mount) return;
@@ -190,12 +202,16 @@ async function renderFor(docId, { force } = {}) {
 </div>`;
 
     hideRedactButton();
+    const reportCounts = reportWideCounts(ocrPages);
     const pagesRoot = mount.querySelector('#ov-pages');
     for (let i = 0; i < pages.length; i++) {
         const page = pages[i];
         const ocr = ocrByKey.get(page.blobKey);
-        pagesRoot.appendChild(pageSectionEl(doc, i, page, ocr));
+        pagesRoot.appendChild(pageSectionEl(doc, i, page, ocr, {}, reportCounts));
     }
+    // Only now: until every card is in the document the pane has nothing like
+    // its full height, and the browser silently clamps scrollTop to what fits.
+    if (keepScroll) mount.scrollTop = keepScroll;
 
     // Toolbar buttons. Status changes go through setDocumentStatus so the
     // bus routing (queued -> OCR queue, ocr-confirmed -> extraction) fires.
@@ -349,6 +365,78 @@ function deepProgressBarHtml(st) {
 }
 
 /**
+ * How many times each report-wide manual redaction's text actually occurs.
+ *
+ * Only the reader's question is worth answering here - "does this veil reach
+ * anywhere I cannot see?" - and that is a property of the whole report, not of
+ * one page, so it is counted once per render and handed down. A redaction
+ * stored as report-wide whose string appears exactly once is indistinguishable
+ * in effect from a one-off, and is presented as one.
+ */
+function reportWideCounts(ocrPages) {
+    const texts = new Set();
+    for (const rec of ocrPages) {
+        for (const o of normalizeDeid(rec.deid)?.overrides?.on || []) {
+            if (o.text) texts.add(o.text);
+        }
+    }
+    const counts = new Map();
+    for (const text of texts) {
+        counts.set(text, ocrPages.reduce((n, rec) => n + countOccurrences(rec.deid, text), 0));
+    }
+    return counts;
+}
+
+/**
+ * Rebuild every page card in place, after a change that reached other pages.
+ *
+ * The alternative - re-rendering the pane - throws away three things the
+ * reader owns and the change did not touch: which tab each card is on, how far
+ * each card's text is scrolled, and where the pane itself sits. Replacing the
+ * cards one by one keeps all three, and avoids emptying the scroll container
+ * at all, so there is no moment when the browser can clamp the scroll position
+ * to a height that is briefly zero.
+ */
+async function refreshAllCards(doc) {
+    const mount = document.getElementById(MOUNT_ID);
+    const pagesRoot = mount?.querySelector('#ov-pages');
+    if (!pagesRoot) return;
+
+    const paneScroll = mount.scrollTop;
+    const ocrPages = await getOcrPagesByDoc(doc.id);
+    if (currentDocId !== doc.id) return;
+    const ocrByKey = new Map(ocrPages.map((r) => [r.pageBlobKey, r]));
+    const counts = reportWideCounts(ocrPages);
+
+    const pages = doc.pages || [];
+    const cards = [...pagesRoot.children];
+    for (let i = 0; i < pages.length && i < cards.length; i++) {
+        const card = cards[i];
+        const bodyScroll = card.querySelector('.ov-body')?.scrollTop ?? 0;
+        const next = pageSectionEl(
+            doc, i, pages[i], ocrByKey.get(pages[i].blobKey),
+            { mode: card.dataset.mode }, counts,
+        );
+        card.replaceWith(next);
+        // After insertion only: a detached card has no scrollable extent, so
+        // assigning to it silently does nothing.
+        const nextBody = next.querySelector('.ov-body');
+        if (nextBody) nextBody.scrollTop = bodyScroll;
+    }
+    mount.scrollTop = paneScroll;
+}
+
+/** Whether two count maps would mark veils differently. Only the crossing of
+ *  "more than one place" matters, so going from 3 occurrences to 4 is not a
+ *  change worth redrawing the pane for. */
+function markingDiffers(before, after) {
+    for (const key of new Set([...before.keys(), ...after.keys()])) {
+        if (((before.get(key) ?? 0) > 1) !== ((after.get(key) ?? 0) > 1)) return true;
+    }
+    return false;
+}
+
+/**
  * One page card.
  *
  * `restore.mode` carries the active tab across a rebuild; without it, saving
@@ -356,7 +444,7 @@ function deepProgressBarHtml(st) {
  * Scroll positions are restored by the caller AFTER insertion - see
  * refreshCard - because a detached element has no scrollable extent.
  */
-function pageSectionEl(doc, pageIndex, page, ocr, restore = {}) {
+function pageSectionEl(doc, pageIndex, page, ocr, restore = {}, reportCounts = new Map()) {
     const wrap = document.createElement('div');
     wrap.className = 'border border-gray-200 rounded shadow-sm bg-white';
     wrap.dataset.pageIndex = String(pageIndex);
@@ -379,7 +467,12 @@ function pageSectionEl(doc, pageIndex, page, ocr, restore = {}) {
     //   Raw       markdown source, veiled, editable
     //   Export    read-only preview of what actually leaves the app, with
     //             each veiled span replaced by [REDACTED]
-    const deid = isCurrentSchema(ocr?.deid) ? ocr.deid : null;
+    // Upgrade an older record once, here, and keep the upgraded object on the
+    // in-memory page: every save below writes `ocr`, so the new shape is
+    // persisted the first time the abstractor touches the page rather than
+    // being re-derived on every render.
+    const deid = normalizeDeid(ocr?.deid);
+    if (ocr && deid) ocr.deid = deid;
     const originalText = ocr?.markdown ?? '';
 
     const summary = deid ? redactionSummary(ocr) : {};
@@ -396,7 +489,7 @@ function pageSectionEl(doc, pageIndex, page, ocr, restore = {}) {
 
     const readonly = ['ocr-confirmed', 'extraction-running', 'extraction-done', 'confirmed', 'exported'].includes(doc.status);
     // Rendered view: marked-up original when redacting, plain text otherwise.
-    const marked = deid ? markPageText(ocr) : { markdown: originalText, marks: [] };
+    const marked = deid ? markPageText(ocr, reportCounts) : { markdown: originalText, marks: [] };
     const initial = originalText;
     const placeholder = ocr ? '' : 'Waiting for OCR&hellip;';
     const renderedHtml = marked.markdown
@@ -457,6 +550,9 @@ function pageSectionEl(doc, pageIndex, page, ocr, restore = {}) {
     const modeButtons = [...wrap.querySelectorAll('.ov-mode')];
     const applyMode = (mode) => {
         currentMode = mode;
+        // Published on the element so a rebuild driven from outside this
+        // closure - refreshAllCards - can put the card back on the same tab.
+        wrap.dataset.mode = mode;
         wrap.querySelectorAll('.ov-pane').forEach((p) => {
             p.classList.toggle('hidden', !p.classList.contains(`ov-${mode}`));
         });
@@ -511,7 +607,7 @@ function pageSectionEl(doc, pageIndex, page, ocr, restore = {}) {
      *  the scroll position of the whole pane. The active tab and the body's
      *  scroll are carried over: a rebuild is triggered by saving an edit, and
      *  the click that caused the save is often the one switching tabs. */
-    const refreshCard = () => {
+    const refreshCard = async () => {
         // The work pane's own scroll has to be restored too: swapping the card
         // out momentarily shortens the document, and the browser clamps
         // scrollTop while it is detached - which reads as the page jumping back
@@ -519,7 +615,26 @@ function pageSectionEl(doc, pageIndex, page, ocr, restore = {}) {
         const mount = document.getElementById(MOUNT_ID);
         const paneScroll = mount?.scrollTop ?? 0;
         const bodyScroll = body.scrollTop;
-        const next = pageSectionEl(doc, pageIndex, page, ocr, { mode: currentMode });
+        // Recounted rather than carried over. A card-local save cannot add a
+        // report-wide redaction, but editing this page's TEXT changes how many
+        // times an existing one occurs - which is exactly what decides whether
+        // its veils are marked as reaching across the report.
+        const counts = reportWideCounts(await getOcrPagesByDoc(doc.id));
+        if (!wrap.isConnected) return;   // a full re-render got there first
+        // Whether a string reaches beyond one place is a fact about the report,
+        // so when the answer changes it changes on every page at once. Rebuild
+        // them all rather than leave the same string marked here and unmarked
+        // overleaf - which would say the two behave differently, and they do
+        // not. Rare enough to be worth the full redraw; the scroll is kept.
+        // Whether a string reaches beyond one place is a fact about the report,
+        // so when the answer changes it changes on every page at once - rebuild
+        // them all rather than leave the same string marked here and unmarked
+        // overleaf, which would say the two behave differently when they do not.
+        if (markingDiffers(reportCounts, counts)) {
+            await refreshAllCards(doc);
+            return;
+        }
+        const next = pageSectionEl(doc, pageIndex, page, ocr, { mode: currentMode }, counts);
         wrap.replaceWith(next);
         // Only after insertion: a detached element has no scrollable extent, so
         // assigning scrollTop while it is still out of the document silently
@@ -554,44 +669,51 @@ function pageSectionEl(doc, pageIndex, page, ocr, restore = {}) {
             ocr.deid = deid;
             await putOcrPage({ ...baseRecord(), markdown: originalText, source: ocr?.source || 'quick', deid });
         } else {
-            // Fold the edit and the redaction change into one write: re-anchor
-            // the (already-updated) overrides onto the edited text.
-            const { deid: next, lost } = reanchorAfterEdit(deid, edited);
+            // Fold the edit and the redaction change into one write: carry the
+            // (already-updated) redactions across onto the edited text.
+            const next = reanchorAfterEdit(ocr, deid, edited);
             ocr.markdown = edited;
             ocr.deid = next;
             ocr.source = 'edit';
             await putOcrPage({ ...baseRecord(), markdown: edited, source: 'edit', deid: next });
-            if (lost) {
-                showToast(
-                    `${lost} redaction${lost === 1 ? '' : 's'} could not be re-applied after your edit - that text has changed.`,
-                    { tone: 'error', duration: 9000 },
-                );
-            }
         }
-        if (redraw) refreshCard();
+        if (redraw) await refreshCard();
     };
 
     /**
-     * Apply or lift a manual redaction across EVERY page of the document.
-     * "Redact this" means the string identifies someone, which does not stop
-     * being true on the next line or the next page.
+     * Apply a redaction decision to EVERY page of the document - the reach of
+     * the "everywhere" half of each action. Anything anchored by text belongs
+     * here: the string identifies someone, which does not stop being true on
+     * the next line or the next page.
      */
-    const saveManualAcrossDoc = async (texts, { remove = false } = {}) => {
+    const applyAcrossDoc = async (mutate) => {
         await saveDeid({ redraw: false });   // flush any edit on this page first
         const pages = await getOcrPagesByDoc(doc.id);
         for (const rec of pages) {
-            if (!isCurrentSchema(rec.deid)) continue;
             // The page we are on is represented by the live `ocr` object, whose
-            // deid we just wrote; use it rather than the copy read back.
-            const target = rec.pageBlobKey === page.blobKey ? ocr : rec;
-            for (const text of texts) {
-                if (remove) removeManualRedaction(target.deid, text);
-                else addManualRedaction(target.deid, text);
-            }
+            // deid we just wrote; use it rather than the copy read back. It is
+            // also the only one an action may place a span on, so `mutate` is
+            // told which page it has in hand.
+            const here = rec.pageBlobKey === page.blobKey;
+            const target = here ? ocr : rec;
+            const normalized = normalizeDeid(target.deid);
+            if (!normalized) continue;
+            target.deid = normalized;
+            mutate(normalized, here);
             await putOcrPage(target);
         }
-        // Other pages changed too, so redraw the whole pane rather than a card.
-        if (currentDocId) await renderFor(currentDocId, { force: true });
+        // Other pages changed too, so every card is rebuilt - in place, so the
+        // reader keeps their tab, their scroll, and their place in the report.
+        await refreshAllCards(doc);
+    };
+
+    /** How many times a string occurs across the whole report, so an action can
+     *  say what its reach would actually be. Counted from the stored pages, so
+     *  an unsaved edit in this card is not reflected - close enough for a label
+     *  offering a choice, and every action re-reads before it writes. */
+    const countAcrossDoc = async (text) => {
+        const pages = await getOcrPagesByDoc(doc.id);
+        return pages.reduce((n, rec) => n + countOccurrences(rec.deid, text), 0);
     };
 
     /** Save edited page text, carrying redactions across (see reanchorAfterEdit).
@@ -605,18 +727,12 @@ function pageSectionEl(doc, pageIndex, page, ocr, restore = {}) {
             await putOcrPage({ ...baseRecord(), markdown: nextText, source: 'edit' });
             return;
         }
-        const { deid: next, lost } = reanchorAfterEdit(deid, nextText);
+        const next = reanchorAfterEdit(ocr, deid, nextText);
         ocr.markdown = nextText;
         ocr.deid = next;
         ocr.source = 'edit';
         await putOcrPage({ ...baseRecord(), markdown: nextText, source: 'edit', deid: next });
-        if (lost) {
-            showToast(
-                `${lost} redaction${lost === 1 ? '' : 's'} could not be re-applied after your edit - that text has changed. Check the page and redact by hand if needed.`,
-                { tone: 'error', duration: 9000 },
-            );
-        }
-        refreshCard();
+        await refreshCard();
     };
 
     // The rendered pane is editable in both modes: click in, type, delete.
@@ -647,13 +763,20 @@ function pageSectionEl(doc, pageIndex, page, ocr, restore = {}) {
     }
 
     if (deid) {
-        // Both redaction actions are offered as a floating button rather than
-        // bound to a plain click, because a plain click has to place the text
-        // cursor: select text to redact it, click inside a veil to keep it.
-        // Wired on both editable panes so redacting works wherever you are.
+        // Redaction actions are offered as a floating bar rather than bound to
+        // a plain click, because a plain click has to place the text cursor:
+        // select text to redact it, click inside a veil to change it. Wired on
+        // both editable panes so redacting works wherever you are.
+        //
+        // Every action comes in a "here" / "everywhere in this report" pair,
+        // and the second is only offered when the string actually occurs more
+        // than once - there is no choice to make otherwise, and an extra button
+        // would only imply there was one.
         const spanHandlers = {
-            /** Redact a selected string, everywhere in the document. */
-            redactText: async (text) => {
+            countAcrossDoc,
+
+            /** Redact a selected string everywhere in the report. */
+            redactEverywhere: async (text) => {
                 if (!textOccursInPage(deid, text)) {
                     // The selection ran across unit boundaries or over Markdown
                     // syntax, so it matches no analyzed text and redacting it
@@ -664,22 +787,75 @@ function pageSectionEl(doc, pageIndex, page, ocr, restore = {}) {
                     );
                     return;
                 }
-                await saveManualAcrossDoc([text]);
+                await applyAcrossDoc((d) => addManualRedaction(d, text));
             },
-            /** Flip an existing veil or dismissed outline. */
-            toggleMark: async (mark, dismissed) => {
-                if (dismissed) {
-                    restoreRange(deid, mark.key, mark.start, mark.end);
-                    await saveDeid();
+
+            /** Redact only the occurrence that was selected. */
+            redactOnce: async (text, index) => {
+                if (!redactNthOccurrenceInPage(deid, index, text)) {
+                    showToast(
+                        'That selection could not be pinned to one place. Nothing was redacted - select the text again, or redact it everywhere.',
+                        { tone: 'error', duration: 9000 },
+                    );
                     return;
                 }
-                // A veil can be automatic, manual, or both merged together.
-                // Automatic spans are dismissed for this page only; manual ones
-                // are lifted document-wide, matching how they were applied.
-                const manual = manualTextsInRange(deid, mark.key, mark.start, mark.end);
-                dismissRange(deid, mark.key, mark.start, mark.end);
-                if (manual.length) await saveManualAcrossDoc(manual, { remove: true });
-                else await saveDeid();
+                await saveDeid();
+            },
+
+            /**
+             * Stop redacting everything under one veil. A veil can be several
+             * redactions merged together, each with its own reach, so each part
+             * is lifted the way it was applied - the alternative is a click
+             * that appears to work and leaves half the veil behind.
+             */
+            liftMark: async (mark) => {
+                const parts = markComposition(deid, mark.key, mark.start, mark.end);
+                dismissSpans(deid, [...parts.autoIds, ...parts.instanceIds]);
+                if (!parts.docTexts.length) { await saveDeid(); return; }
+                await applyAcrossDoc((d) => {
+                    for (const text of parts.docTexts) removeManualRedaction(d, text);
+                });
+            },
+
+            /** Stop redacting this string anywhere in the report. */
+            liftEverywhere: async (mark) => {
+                await applyAcrossDoc((d) => dismissTextEverywhere(d, mark.text));
+            },
+
+            /** Put a dismissed span back into effect - here, or everywhere if
+             *  that is how it was lifted. */
+            restoreMark: async (mark) => {
+                const liftedEverywhere = (deid.overrides?.offText || [])
+                    .some((o) => o.text === mark.text);
+                restoreSpans(deid, mark.ids);
+                if (!liftedEverywhere) { await saveDeid(); return; }
+                await applyAcrossDoc((d) => restoreTextEverywhere(d, mark.text));
+            },
+
+            /** Narrow a report-wide redaction to the one place it was clicked.
+             *  Pinned down before anything is written, because the write itself
+             *  can re-flow the page when there is an unsaved edit to flush. */
+            narrowToHere: async (mark) => {
+                const index = occurrenceIndexInPage(deid, mark.key, mark.start, mark.end, mark.text);
+                if (index < 0) {
+                    showToast(
+                        'Could not pin that redaction to a single place, so it is still redacted everywhere.',
+                        { tone: 'error', duration: 9000 },
+                    );
+                    return;
+                }
+                await applyAcrossDoc((d, here) => {
+                    if (here) redactNthOccurrenceInPage(d, index, mark.text);
+                    removeManualRedaction(d, mark.text);
+                });
+            },
+
+            /** Widen a one-off redaction to the whole report. */
+            widenToDoc: async (mark) => {
+                await applyAcrossDoc((d, here) => {
+                    if (here) dismissSpans(d, mark.ids);
+                    addManualRedaction(d, mark.text);
+                });
             },
         };
         for (const pane of [rendered, rawEl]) {
@@ -704,67 +880,111 @@ function pageSectionEl(doc, pageIndex, page, ocr, restore = {}) {
 
 // ---------------------------------------------------------------- manual redaction
 
-/** Shared floating action button, created once. */
-let spanActionButton = null;
+/** Shared floating action bar, created once. Holds one or two buttons: the
+ *  action itself, and where the choice is real, the same action at the other
+ *  reach. */
+let spanActionBar = null;
 
 function hideSpanAction() {
-    if (spanActionButton) spanActionButton.style.display = 'none';
+    actionToken++;   // any in-flight offer is now stale
+    if (spanActionBar) spanActionBar.style.display = 'none';
 }
 // Exposed under the old name for the render path.
 const hideRedactButton = hideSpanAction;
 
-function spanActionEl() {
-    if (!spanActionButton) {
-        spanActionButton = document.createElement('button');
-        spanActionButton.type = 'button';
-        spanActionButton.className =
-            'fixed z-50 rounded-md bg-gray-900 px-2.5 py-1 text-[11px] font-medium text-white shadow-lg hover:bg-gray-700';
+/** Bumped whenever the offer changes. An action's reach has to be counted
+ *  across the document before it can be labelled, and the caret can move while
+ *  that read is in flight - so a bar is only shown if its token is still the
+ *  current one. */
+let actionToken = 0;
+
+function spanActionBarEl() {
+    if (!spanActionBar) {
+        spanActionBar = document.createElement('div');
+        spanActionBar.className = 'fixed z-50 flex items-stretch rounded-md shadow-lg overflow-hidden text-[11px] font-medium';
         // Keep focus in the editor: taking it would fire the pane's blur
-        // handler, re-render the card, and destroy this button mid-click.
-        spanActionButton.addEventListener('mousedown', (e) => e.preventDefault());
-        document.body.appendChild(spanActionButton);
+        // handler, re-render the card, and destroy this bar mid-click.
+        spanActionBar.addEventListener('mousedown', (e) => e.preventDefault());
+        document.body.appendChild(spanActionBar);
     }
-    return spanActionButton;
+    return spanActionBar;
 }
 
-function placeSpanAction(rect, label, onClick) {
-    const btn = spanActionEl();
-    btn.textContent = label;
-    btn.style.display = 'block';
-    btn.style.left = `${Math.max(8, rect.left)}px`;
-    btn.style.top = `${Math.max(8, rect.top - 30)}px`;
-    btn.onclick = onClick;
+/** @param {Array<{label: string, title?: string, run: Function}>} actions */
+function placeSpanActions(rect, actions) {
+    const bar = spanActionBarEl();
+    bar.textContent = '';
+    actions.forEach((action, i) => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        // The first action is the plain one - what the click would have done
+        // before there was a choice - so it keeps the solid weight and the
+        // alternative reads as the alternative.
+        btn.className = i === 0
+            ? 'bg-gray-900 px-2.5 py-1 text-white hover:bg-gray-700'
+            : 'bg-gray-700 px-2.5 py-1 text-gray-100 border-l border-gray-600 hover:bg-gray-600';
+        btn.textContent = action.label;
+        if (action.title) btn.title = action.title;
+        btn.onclick = async () => {
+            hideSpanAction();
+            window.getSelection()?.removeAllRanges();
+            await action.run();
+        };
+        bar.appendChild(btn);
+    });
+    bar.style.display = 'flex';
+    bar.style.left = `${Math.max(8, rect.left)}px`;
+    bar.style.top = `${Math.max(8, rect.top - 30)}px`;
 }
 
 /**
- * Offer the redaction action that fits what the caret or selection is on:
+ * Offer the redaction actions that fit what the caret or selection is on.
  *
- *   any selection         ->  Redact just what is selected
- *   caret inside a veil   ->  Unredact that span
- *   caret inside an outline -> Redact that span again
+ *   selection                  Redact  |  Only this one
+ *   caret in an auto veil      Unredact  |  Unredact all N
+ *   caret in a report-wide veil Unredact  |  Only here
+ *   caret in a one-off veil    Unredact  |  Redact all N
+ *   caret in a dismissed span  Redact  |  Redact all N
+ *
+ * The second button appears only when the string occurs more than once in the
+ * report, so the two reaches actually differ. When they don't, one button says
+ * everything there is to say.
  *
  * A SELECTION always wins over the span it sits in. Selecting part of an
  * existing span means narrowing it - "redact only these three digits" - so
  * treating that as a click on the whole span would redact far more than was
  * asked for.
- *
- * The selection is anchored to the analyzed unit it sits in - the enclosing
- * .ov-unit wrapper, or the single whole-page unit when there is no wrapper.
  */
-function showSpanAction(pane, marks, handlers) {
+async function showSpanAction(pane, marks, handlers) {
     const sel = window.getSelection();
     if (!sel || !sel.anchorNode || !pane.contains(sel.anchorNode)) { hideSpanAction(); return; }
     const text = sel.isCollapsed ? '' : sel.toString().trim();
+    const token = ++actionToken;
 
-    // A selection needs no unit: manual redactions are matched by text across
-    // the whole document, so a selection that runs over a veil or across
-    // Markdown syntax still produces an actionable string.
     if (text) {
-        placeSpanAction(sel.getRangeAt(0).getBoundingClientRect(), 'Redact', async () => {
-            hideSpanAction();
-            window.getSelection()?.removeAllRanges();
-            await handlers.redactText(text);
-        });
+        // A selection needs no unit: a report-wide redaction is matched by text,
+        // so a selection that runs over a veil or across Markdown syntax still
+        // produces an actionable string. Only the "just this one" half needs to
+        // know which occurrence it is.
+        const rect = sel.getRangeAt(0).getBoundingClientRect();
+        const index = selectionOccurrenceIndex(pane, sel, text);
+        const total = await handlers.countAcrossDoc(text);
+        if (token !== actionToken) return;
+        const actions = [{
+            label: total > 1 ? `Redact all ${total}` : 'Redact',
+            title: total > 1
+                ? `Redact every "${text}" in this report`
+                : 'Redact this text wherever it appears in this report',
+            run: () => handlers.redactEverywhere(text),
+        }];
+        if (total > 1 && index >= 0) {
+            actions.push({
+                label: 'Only this one',
+                title: 'Redact just this occurrence and leave the others alone',
+                run: () => handlers.redactOnce(text, index),
+            });
+        }
+        placeSpanActions(rect, actions);
         return;
     }
 
@@ -772,11 +992,70 @@ function showSpanAction(pane, marks, handlers) {
     if (!markEl) { hideSpanAction(); return; }
     const mark = marks[Number(markEl.dataset.markId)];
     if (!mark) { hideSpanAction(); return; }
-    const dismissed = mark.kind === 'off';
-    placeSpanAction(markEl.getBoundingClientRect(), dismissed ? 'Redact' : 'Unredact', async () => {
-        hideSpanAction();
-        await handlers.toggleMark(mark, dismissed);
-    });
+
+    const rect = markEl.getBoundingClientRect();
+    const total = await handlers.countAcrossDoc(mark.text);
+    if (token !== actionToken) return;
+    placeSpanActions(rect, veilActions(mark, total, handlers));
+}
+
+/** The two ways of acting on an existing veil, matched to how it was made. */
+function veilActions(mark, total, handlers) {
+    const many = total > 1;
+    const also = (label, title, run) => (many ? [{ label, title, run }] : []);
+
+    if (mark.kind === 'off') {
+        return [
+            { label: 'Redact', title: 'Redact this occurrence after all', run: () => handlers.restoreMark(mark) },
+            ...also(`Redact all ${total}`, `Redact every "${mark.text}" in this report`,
+                () => handlers.widenToDoc(mark)),
+        ];
+    }
+    if (mark.sources?.includes('doc')) {
+        return [
+            { label: 'Unredact', title: 'Stop redacting this string anywhere in the report', run: () => handlers.liftMark(mark) },
+            ...also('Only here', 'Keep redacting this one, and stop redacting the others',
+                () => handlers.narrowToHere(mark)),
+        ];
+    }
+    if (mark.sources?.includes('instance')) {
+        return [
+            { label: 'Unredact', title: 'Stop redacting this occurrence', run: () => handlers.liftMark(mark) },
+            ...also(`Redact all ${total}`, `Redact every "${mark.text}" in this report`,
+                () => handlers.widenToDoc(mark)),
+        ];
+    }
+    return [
+        { label: 'Unredact', title: 'Keep this occurrence - it is not personal information', run: () => handlers.liftMark(mark) },
+        ...also(`Unredact all ${total}`, `Keep every "${mark.text}" in this report`,
+            () => handlers.liftEverywhere(mark)),
+    ];
+}
+
+/**
+ * Which occurrence of `text` the selection is, counting those above it in the
+ * pane. See occurrenceIndexInPage: an index is the only thing that survives
+ * the trip from a rendered view back to the stored text, and the store checks
+ * it rather than trusting it.
+ */
+function selectionOccurrenceIndex(pane, sel, text) {
+    if (!text) return -1;
+    const before = document.createRange();
+    before.selectNodeContents(pane);
+    try {
+        const range = sel.getRangeAt(0);
+        before.setEnd(range.startContainer, range.startOffset);
+    } catch {
+        return -1;   // selection starts outside the pane
+    }
+    const prefix = before.toString();
+    let index = 0;
+    let i = prefix.indexOf(text);
+    while (i !== -1) {
+        index++;
+        i = prefix.indexOf(text, i + text.length);
+    }
+    return index;
 }
 
 /**
