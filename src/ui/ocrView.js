@@ -29,6 +29,8 @@ import { setDocumentStatus } from '../core/status.js';
 import { attentionRegions } from '../ocr/confidence.js';
 import {
     addManualRedaction,
+    countExceptions,
+    countLiveMatches,
     countOccurrences,
     dismissSpans,
     dismissMatchingSpans,
@@ -45,6 +47,7 @@ import {
     resetOverrides,
     restoreSpans,
     textOccursInPage,
+    unexceptMatching,
     unexceptSpans,
 } from '../deid/deidentify.js';
 import { decorateMarks, markPageText } from '../deid/marks.js';
@@ -779,13 +782,17 @@ function pageSectionEl(doc, pageIndex, page, ocr, restore = {}, reportCounts = n
         await refreshAllCards(doc);
     };
 
-    /** How many times a string occurs across the whole report, so an action can
-     *  say what its reach would actually be. Counted from the stored pages, so
-     *  an unsaved edit in this card is not reflected - close enough for a label
-     *  offering a choice, and every action re-reads before it writes. */
+    /** What an action's reach would actually be: how many times the string
+     *  occurs across the report, and how many of those are currently held out
+     *  of a report-wide redaction. Counted from the stored pages, so an unsaved
+     *  edit in this card is not reflected - close enough for a label offering a
+     *  choice, and every action re-reads before it writes. */
     const countAcrossDoc = async (text) => {
         const pages = await getOcrPagesByDoc(doc.id);
-        return pages.reduce((n, rec) => n + countOccurrences(rec.deid, text), 0);
+        return {
+            total: pages.reduce((n, rec) => n + countOccurrences(rec.deid, text), 0),
+            exceptions: pages.reduce((n, rec) => n + countExceptions(rec.deid, text), 0),
+        };
     };
 
     /** Save edited page text, carrying redactions across (see reanchorAfterEdit).
@@ -980,13 +987,29 @@ function pageSectionEl(doc, pageIndex, page, ocr, restore = {}, reportCounts = n
                 // that half in force would make the click appear to do nothing.
                 const parts = markComposition(deid, mark.key, mark.start, mark.end);
                 dismissSpans(deid, [...parts.autoIds, ...parts.instanceIds]);
-                await saveDeid();
+                await saveDeid({ redraw: false });
+
+                // Excepting the last occurrence it still covered leaves a
+                // redaction that redacts nothing. Rather than keep it - marking
+                // every occurrence as report-wide while redacting none of them,
+                // and silently catching that string again if it were typed
+                // later - it is taken away, along with the exceptions that only
+                // existed to hold it off.
+                const pages = await getOcrPagesByDoc(doc.id);
+                const live = pages.reduce((n, rec) => n + countLiveMatches(rec.deid, mark.text), 0);
+                if (live > 0) { await refreshCard(); return; }
+                await applyAcrossDoc((d) => removeManualRedaction(d, mark.text));
             },
 
             /** Put an excepted occurrence back under the report-wide redaction. */
             unexceptMark: async (mark) => {
                 unexceptSpans(deid, mark.ids);
                 await saveDeid();
+            },
+
+            /** Put every occurrence being held out back under it. */
+            unexceptEverywhere: async (mark) => {
+                await applyAcrossDoc((d) => unexceptMatching(d, mark.text));
             },
 
             /** Stop redacting this string anywhere in the report. */
@@ -1157,7 +1180,7 @@ async function showSpanAction(pane, marks, handlers) {
         // know which occurrence it is.
         const rect = sel.getRangeAt(0).getBoundingClientRect();
         const index = selectionOccurrenceIndex(pane, sel, text);
-        const total = await handlers.countAcrossDoc(text);
+        const { total } = await handlers.countAcrossDoc(text);
         if (token !== actionToken) return;
         const actions = [{
             label: total > 1 ? `Redact all ${total}` : 'Redact',
@@ -1183,9 +1206,9 @@ async function showSpanAction(pane, marks, handlers) {
     if (!mark) { hideSpanAction(); return; }
 
     const rect = markEl.getBoundingClientRect();
-    const total = await handlers.countAcrossDoc(mark.text);
+    const counts = await handlers.countAcrossDoc(mark.text);
     if (token !== actionToken) return;
-    placeSpanActions(rect, veilActions(mark, total, handlers));
+    placeSpanActions(rect, veilActions(mark, counts, handlers));
 }
 
 /**
@@ -1196,19 +1219,28 @@ async function showSpanAction(pane, marks, handlers) {
  * A report-wide redaction reads no differently: clicking its fifth occurrence
  * offers to keep that one, not to undo all five.
  */
-function veilActions(mark, total, handlers) {
+function veilActions(mark, counts, handlers) {
+    const { total, exceptions } = counts;
     const many = total > 1;
     const also = (label, title, run) => (many ? [{ label, title, run }] : []);
 
-    // An occurrence already kept out of a report-wide redaction: the only
-    // move left is to put it back under one, and "everywhere" is where it
-    // already applies.
+    // An occurrence already kept out of a report-wide redaction. Putting all of
+    // them back is a different act from putting this one back only once there
+    // is more than one being held out - until then the two buttons would do the
+    // same thing, and offering both would invent a choice.
     if (mark.sources?.includes('except')) {
-        return [{
-            label: 'Redact',
-            title: 'Redact this occurrence too, like the rest of the report',
-            run: () => handlers.unexceptMark(mark),
-        }];
+        return [
+            {
+                label: 'Redact',
+                title: 'Redact this occurrence too, like the rest of the report',
+                run: () => handlers.unexceptMark(mark),
+            },
+            ...(exceptions > 1 ? [{
+                label: `Redact all ${total}`,
+                title: `Redact every "${mark.text}" in this report again`,
+                run: () => handlers.unexceptEverywhere(mark),
+            }] : []),
+        ];
     }
     if (mark.kind === 'off') {
         return [

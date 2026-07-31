@@ -700,6 +700,13 @@ function dropExceptionsFor(deid, text) {
     }
 }
 
+/** Put every occurrence held out of a report-wide redaction back under it. */
+export function unexceptMatching(deid, text) {
+    if (!text) return deid;
+    dropExceptionsFor(deid, text);
+    return deid;
+}
+
 /** Stop redacting a string that was redacted everywhere. */
 export function removeManualRedaction(deid, text) {
     if (!text) return deid;
@@ -800,6 +807,43 @@ export function countOccurrences(deid, text) {
     const d = normalizeDeid(deid);
     if (!d || !text) return 0;
     return d.units.reduce((n, u) => n + occurrencesOf(u.text, text).length, 0);
+}
+
+/** How many occurrences are being held out of the report-wide redaction of
+ *  `text`. Summed over pages, this is what says whether withdrawing one
+ *  exception differs from withdrawing them all. */
+export function countExceptions(deid, text) {
+    const d = normalizeDeid(deid);
+    if (!d || !text) return 0;
+    let n = 0;
+    for (const unit of d.units) {
+        for (const s of unit.spans || []) {
+            if (s.except && unit.text.slice(s.start, s.end) === text) n++;
+        }
+    }
+    return n;
+}
+
+/**
+ * How many occurrences the report-wide redaction of `text` still covers here.
+ *
+ * Counted the same way effectiveSpans decides, rather than by subtracting
+ * exceptions from occurrences, so an exception that has drifted off an
+ * occurrence boundary cannot make a redaction look emptier than it is. Summed
+ * over pages, zero means the redaction has been excepted out of existence.
+ */
+export function countLiveMatches(deid, text) {
+    const d = normalizeDeid(deid);
+    if (!d || !text) return 0;
+    let n = 0;
+    for (const unit of d.units) {
+        const exceptions = (unit.spans || []).filter((s) => s.except);
+        for (const at of occurrencesOf(unit.text, text)) {
+            if (exceptions.some((e) => e.start < at.end && at.start < e.end)) continue;
+            n++;
+        }
+    }
+    return n;
 }
 
 /** Count of spans currently redacted across a page (for badges). */
