@@ -41,11 +41,13 @@ import {
     occurrenceIndexInPage,
     reanchorAfterEdit,
     pageOutputText,
+    redactInstance,
     redactNthOccurrenceInPage,
     redactionSummary,
     removeManualRedaction,
     resetOverrides,
     restoreSpans,
+    sourceRangesFromRendered,
     textOccursInPage,
     unexceptMatching,
     unexceptSpans,
@@ -937,6 +939,34 @@ function pageSectionEl(doc, pageIndex, page, ocr, restore = {}, reportCounts = n
                 await applyAcrossDoc((d) => addManualRedaction(d, text));
             },
 
+            /**
+             * Redact a selection that matches no single piece of stored text -
+             * one running across blocks, or over Markdown syntax the rendered
+             * view has dropped.
+             *
+             * Anchored by position rather than by string. A stretch of several
+             * paragraphs is a one-off by nature: the same run of blocks will not
+             * turn up again elsewhere, and redacting it by text would mean
+             * matching a long multi-line string that can only ever hit once.
+             * Splitting it into one redaction per line would be worse still -
+             * a line like "No atypia." would then be redacted report-wide.
+             */
+            redactRegion: async (region) => {
+                await saveDeid({ redraw: false });   // it may include unsaved text
+                const ranges = region
+                    ? sourceRangesFromRendered(ocr, deid, region.text, region.start, region.end)
+                    : [];
+                if (!ranges.length) {
+                    showToast(
+                        'That selection could not be matched to the text of this page, so it was not redacted.',
+                        { tone: 'error', duration: 9000 },
+                    );
+                    return;
+                }
+                for (const at of ranges) redactInstance(deid, at.key, at.start, at.end);
+                await saveDeid();
+            },
+
             /** Redact only the occurrence that was selected. */
             redactOnce: async (text, index) => {
                 await saveDeid({ redraw: false });   // as above: it may be unsaved text
@@ -1180,8 +1210,23 @@ async function showSpanAction(pane, marks, handlers) {
         // know which occurrence it is.
         const rect = sel.getRangeAt(0).getBoundingClientRect();
         const index = selectionOccurrenceIndex(pane, sel, text);
+        const region = selectionRegion(pane, sel);
         const { total } = await handlers.countAcrossDoc(text);
         if (token !== actionToken) return;
+
+        // Nowhere in the report does this string appear as stored text - it
+        // runs across blocks, or over Markdown syntax the rendered view has
+        // dropped. It is still a real stretch of the page, so it is redacted by
+        // position instead, and the reach question does not arise.
+        if (total === 0) {
+            placeSpanActions(rect, [{
+                label: 'Redact',
+                title: 'Redact the selected text',
+                run: () => handlers.redactRegion(region),
+            }]);
+            return;
+        }
+
         const actions = [{
             label: total > 1 ? `Redact all ${total}` : 'Redact',
             title: total > 1
@@ -1284,6 +1329,28 @@ function veilActions(mark, counts, handlers) {
  * the trip from a rendered view back to the stored text, and the store checks
  * it rather than trusting it.
  */
+/**
+ * Where the selection sits in the pane's own text, for a redaction that has to
+ * be placed by position rather than found by string.
+ *
+ * The pane's text is captured with it, because that is what the mapping onto
+ * the source is measured against, and the caret may have moved on by the time
+ * the button is clicked.
+ */
+function selectionRegion(pane, sel) {
+    const before = document.createRange();
+    before.selectNodeContents(pane);
+    let range;
+    try {
+        range = sel.getRangeAt(0);
+        before.setEnd(range.startContainer, range.startOffset);
+    } catch {
+        return null;   // selection starts outside the pane
+    }
+    const start = before.toString().length;
+    return { text: pane.textContent, start, end: start + range.toString().length };
+}
+
 function selectionOccurrenceIndex(pane, sel, text) {
     if (!text) return -1;
     const before = document.createRange();

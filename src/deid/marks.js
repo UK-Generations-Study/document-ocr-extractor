@@ -38,7 +38,6 @@ const ANY_SENTINEL = /[-]/g;
 
 const MARK_HEAD_RX = /\uE000\d+\uE001/g;
 const UNIT_HEAD_RX = /\uE003[^\uE004]*\uE004/g;
-const MARK_RX = /(\d+)([\s\S]*?)/;
 const UNIT_RX = /([^]*)([\s\S]*?)/;
 
 /**
@@ -144,15 +143,7 @@ export function decorateMarks(root, marks) {
         return el;
     });
 
-    replaceInTextNodes(root, MARK_RX, (m) => {
-        const mark = byId.get(m[1]);
-        const el = document.createElement('span');
-        el.className = markClass(mark);
-        el.dataset.markId = m[1];
-        el.textContent = m[2];
-        if (mark) el.title = markTitle(mark);
-        return el;
-    });
+    wrapMarkedText(root, byId);
 
     // A marker whose text Markdown split across elements never matched; clear
     // its remains so nothing odd shows up.
@@ -200,6 +191,92 @@ function markTitle(mark) {
     }
     const score = typeof mark.score === 'number' ? ` (${Math.round(mark.score * 100)}%)` : '';
     return `${types}${score} - will be redacted on export. Click to change.`;
+}
+
+/**
+ * Wrap everything between an opening and closing redaction sentinel, however
+ * many elements it turns out to span.
+ *
+ * A redaction is NOT always one element. Selecting a heading, a paragraph and a
+ * list redacts one contiguous stretch of source, but Markdown renders it as
+ * several sibling blocks - so the two sentinels come out in different text
+ * nodes and no single element could ever hold both. The earlier pass looked for
+ * an opening and its closing sentinel within one text node, found neither, and
+ * the veil silently never appeared: the Rendered pane showed text as untouched
+ * that the export was in fact removing.
+ *
+ * So the sentinels are read as a stream instead. Each text node contributes
+ * whatever part of it lies inside an open mark, wrapped in its own element, and
+ * every one of them carries the same data-mark-id - which is all the pane needs,
+ * since a click resolves an element back to its mark by that id.
+ */
+function wrapMarkedText(root, byId) {
+    // An unmatched opening sentinel would otherwise leave the rest of the page
+    // wrapped as redacted. Nothing renders rather than everything.
+    const all = root.textContent || '';
+    const opens = (all.match(//g) || []).length;
+    const closes = (all.match(//g) || []).length;
+    if (!opens || opens !== closes) return;
+
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    const nodes = [];
+    let node;
+    while ((node = walker.nextNode())) nodes.push(node);
+
+    let openId = null;   // the mark we are inside, carried across nodes
+    for (const target of nodes) {
+        const tokens = readSentinels(target.data);
+        // Untouched text outside any mark: by far the common case.
+        if (openId === null && tokens.length === 1 && tokens[0].type === 'text') continue;
+
+        const frag = document.createDocumentFragment();
+        for (const token of tokens) {
+            if (token.type === 'open') { openId = token.id; continue; }
+            if (token.type === 'close') { openId = null; continue; }
+            if (!token.value) continue;
+            // Whitespace between two blocks belongs to neither; veiling it
+            // would draw a black sliver in the gap.
+            if (openId === null || !token.value.trim()) {
+                frag.appendChild(document.createTextNode(token.value));
+                continue;
+            }
+            const mark = byId.get(openId);
+            const el = document.createElement('span');
+            el.className = markClass(mark);
+            el.dataset.markId = openId;
+            el.textContent = token.value;
+            if (mark) el.title = markTitle(mark);
+            frag.appendChild(el);
+        }
+        target.replaceWith(frag);
+    }
+}
+
+/** One text node's worth of sentinel stream: plain text, mark openings (which
+ *  carry the id) and mark closings, in the order they appear. */
+function readSentinels(data) {
+    const out = [];
+    let i = 0;
+    while (i < data.length) {
+        if (data[i] === MARK_OPEN) {
+            const sep = data.indexOf(MARK_SEP, i + 1);
+            if (sep !== -1) {
+                out.push({ type: 'open', id: data.slice(i + 1, sep) });
+                i = sep + 1;
+                continue;
+            }
+        }
+        if (data[i] === MARK_CLOSE) {
+            out.push({ type: 'close' });
+            i++;
+            continue;
+        }
+        let j = i;
+        while (j < data.length && data[j] !== MARK_OPEN && data[j] !== MARK_CLOSE) j++;
+        out.push({ type: 'text', value: data.slice(i, j) });
+        i = j;
+    }
+    return out;
 }
 
 /**

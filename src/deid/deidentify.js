@@ -581,6 +581,40 @@ export function markComposition(deid, key, start, end) {
     return out;
 }
 
+/**
+ * Where a stretch of the RENDERED text of a page sits in its source.
+ *
+ * A selection that runs across blocks - a heading, then a paragraph, then a
+ * list - has no counterpart to match on: the rendered text has lost the `## `
+ * and the `-   `, so it is a substring of nothing. But it is still the same
+ * characters in the same order, which is exactly what a diff aligns, so the
+ * selection's ends are mapped onto the page's source the same way offsets are
+ * carried across an edit.
+ *
+ * The result is split per unit, because a redaction belongs to the unit it sits
+ * in; a selection covering three blocks becomes three ranges.
+ *
+ * @returns {Array<{key: string, start: number, end: number}>}
+ */
+export function sourceRangesFromRendered(ocrPage, deid, renderedText, start, end) {
+    const d = normalizeDeid(deid);
+    if (!d || !renderedText || end <= start) return [];
+    const { text: pageText, offsets } = flattenUnits(ocrPage, d);
+    const at = mapSpan(matchedRuns(renderedText, pageText), start, end);
+    if (!at) return [];
+
+    const out = [];
+    for (const unit of d.units) {
+        const key = unitKey(unit.blockIndex, unit.path);
+        const base = offsets.get(key);
+        if (base === undefined) continue;
+        const from = Math.max(at.start, base) - base;
+        const to = Math.min(at.end, base + unit.text.length) - base;
+        if (to > from) out.push({ key, start: from, end: to });
+    }
+    return out;
+}
+
 /** Redact one occurrence and no other, as a span of its own unit. */
 export function redactInstance(deid, key, start, end) {
     const unit = findUnit(deid, key);
