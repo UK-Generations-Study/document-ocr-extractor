@@ -14,7 +14,7 @@
  * actually redacted is computed on demand from:
  *
  *     spans matching the enabled entity types and score threshold
- *   - spans the user dismissed          (overrides.off, overrides.offText)
+ *   - spans the user dismissed          (overrides.off)
  *   + spans the user added by hand      (overrides.on, and manual unit spans)
  *
  * That is what makes the entity toggles and the score slider live: changing
@@ -40,9 +40,12 @@
  *                               filter - so it is carried across edits by the
  *                               same machinery, with no special case.
  *
- * The dismissals mirror that pairing exactly: overrides.off names spans by id
- * (this one, here), overrides.offText names a string (this text, anywhere in
- * the report).
+ * Dismissals, by contrast, are ALWAYS by span id - "not this one" - even when
+ * the abstractor asked to lift a string everywhere. That reach is applied by
+ * naming every span that matches at the time, rather than by storing a rule
+ * over the text: Presidio runs once, so there is never a later detection for
+ * such a rule to catch, and naming the spans is what leaves a single one
+ * restorable afterwards.
  *
  * A report-wide redaction can still be wrong in ONE place - the same surname
  * belonging to a consultant rather than the patient - so it takes exceptions:
@@ -166,7 +169,7 @@ const emptyDeid = () => ({
     schema: SCHEMA,
     at: Date.now(),
     units: [],
-    overrides: { off: [], offText: [], on: [] },
+    overrides: { off: [], on: [] },
 });
 
 /**
@@ -247,12 +250,20 @@ export function normalizeDeid(deid) {
     if (!deid || !Array.isArray(deid.units)) return null;
     if (deid.schema === SCHEMA) {
         const o = deid.overrides;
-        if (o && Array.isArray(o.off) && Array.isArray(o.offText) && Array.isArray(o.on)) return deid;
-        deid.overrides = {
-            off: o?.off || [],
-            offText: o?.offText || [],
-            on: o?.on || [],
-        };
+        if (o && Array.isArray(o.off) && Array.isArray(o.on) && !o.offText) return deid;
+        // A dismissal could once be a rule over TEXT ("not this string, ever").
+        // Expanded here into the spans it was standing for, which is the only
+        // form that lets one of them be restored on its own afterwards.
+        const off = [...(o?.off || [])];
+        for (const { text } of o?.offText || []) {
+            for (const unit of deid.units) {
+                for (const s of unit.spans || []) {
+                    if (unit.text.slice(s.start, s.end) !== text) continue;
+                    if (!off.some((x) => x.id === s.id)) off.push({ id: s.id });
+                }
+            }
+        }
+        deid.overrides = { off, on: o?.on || [] };
         return deid;
     }
     if (deid.schema !== 2) return null;
@@ -267,7 +278,7 @@ export function normalizeDeid(deid) {
     const on = (deid.overrides?.on || [])
         .filter((o) => o.text)
         .map((o) => ({ id: newId(), text: o.text }));
-    return { schema: SCHEMA, at: deid.at || Date.now(), units, overrides: { off, offText: [], on } };
+    return { schema: SCHEMA, at: deid.at || Date.now(), units, overrides: { off, on } };
 }
 
 // ---------------------------------------------------------------- edits
@@ -300,7 +311,6 @@ export function reanchorAfterEdit(ocrPage, deid, newText) {
     // they survive verbatim even when the page is emptied.
     const overrides = {
         off: [...(current.overrides.off || [])],
-        offText: [...(current.overrides.offText || [])],
         on: [...(current.overrides.on || [])],
     };
     if (!text.trim()) return { ...emptyDeid(), at: current.at, overrides };
@@ -386,7 +396,6 @@ export function isCurrentSchema(deid) {
 export function effectiveSpans(deid, unit, settings = getCachedSettings()) {
     const overrides = deid.overrides || {};
     const off = new Set((overrides.off || []).map((o) => o.id));
-    const offText = new Set((overrides.offText || []).map((o) => o.text).filter(Boolean));
     const wanted = settings.deidEntities || [];
     const threshold = Number(settings.deidScoreThreshold) || 0;
 
@@ -408,9 +417,8 @@ export function effectiveSpans(deid, unit, settings = getCachedSettings()) {
             continue;
         }
         if (!passesFilter(s)) continue;
-        const lifted = off.has(s.id) || offText.has(unit.text.slice(s.start, s.end));
         const entry = { ...s, source: s.manual ? 'instance' : 'auto' };
-        (lifted ? dismissed : enabled).push(entry);
+        (off.has(s.id) ? dismissed : enabled).push(entry);
     }
 
     // Document-wide manual redactions are anchored by TEXT, not offsets: the
@@ -539,9 +547,8 @@ function findUnit(deid, key) {
 }
 
 function ensureOverrides(deid) {
-    if (!deid.overrides) deid.overrides = { off: [], offText: [], on: [] };
+    if (!deid.overrides) deid.overrides = { off: [], on: [] };
     if (!deid.overrides.off) deid.overrides.off = [];
-    if (!deid.overrides.offText) deid.overrides.offText = [];
     if (!deid.overrides.on) deid.overrides.on = [];
     return deid.overrides;
 }
@@ -579,13 +586,9 @@ export function redactInstance(deid, key, start, end) {
     const unit = findUnit(deid, key);
     if (!unit || end <= start) return deid;
     ensureOverrides(deid);
-    const text = unit.text.slice(start, end);
     // An identical instance span already here would render as one veil anyway.
     const already = (unit.spans || []).some((s) => s.manual && s.start === start && s.end === end);
     if (already) return deid;
-    // A dismissal of this exact text, made "everywhere", would immediately undo
-    // what is being asked for here.
-    deid.overrides.offText = deid.overrides.offText.filter((o) => o.text !== text);
     unit.spans = [...(unit.spans || []), {
         id: newId(), start, end, entityType: MANUAL_ENTITY, score: 1, manual: true,
     }];
@@ -680,16 +683,21 @@ export function addManualRedaction(deid, text) {
     const value = (text || '').trim();
     if (!value) return deid;
     const overrides = ensureOverrides(deid);
-    overrides.offText = overrides.offText.filter((o) => o.text !== value);
     // Asking for this string everywhere is a later, more explicit instruction
     // than any exception carved out of a previous "everywhere" - so the
     // exceptions go, rather than quietly surviving to punch holes in it.
-    for (const unit of deid.units || []) {
-        unit.spans = (unit.spans || [])
-            .filter((s) => !(s.except && unit.text.slice(s.start, s.end) === value));
-    }
+    dropExceptionsFor(deid, value);
     if (!overrides.on.some((o) => o.text === value)) overrides.on.push({ id: newId(), text: value });
     return deid;
+}
+
+/** An exception is defined against a report-wide redaction, so it means
+ *  nothing once that redaction is gone. */
+function dropExceptionsFor(deid, text) {
+    for (const unit of deid.units || []) {
+        unit.spans = (unit.spans || [])
+            .filter((s) => !(s.except && unit.text.slice(s.start, s.end) === text));
+    }
 }
 
 /** Stop redacting a string that was redacted everywhere. */
@@ -697,6 +705,7 @@ export function removeManualRedaction(deid, text) {
     if (!text) return deid;
     const overrides = ensureOverrides(deid);
     overrides.on = overrides.on.filter((o) => o.text !== text);
+    dropExceptionsFor(deid, text);
     return deid;
 }
 
@@ -729,31 +738,36 @@ export function restoreSpans(deid, ids) {
     return deid;
 }
 
-/** Stop redacting every span whose text matches, anywhere in the report - the
- *  caller replays this onto every page. The counterpart of addManualRedaction:
- *  same reach, opposite direction. */
-export function dismissTextEverywhere(deid, text) {
+/**
+ * Stop redacting every span whose text matches, anywhere in the report - the
+ * caller replays this onto every page. The counterpart of addManualRedaction:
+ * same reach, opposite direction.
+ *
+ * Applied by naming the matching spans rather than by recording a rule about
+ * the string, so that any ONE of them can be put back afterwards without
+ * disturbing the rest. Nothing is lost by settling it now: Presidio runs once,
+ * so no later detection could match a rule left standing.
+ */
+export function dismissMatchingSpans(deid, text) {
     const value = text || '';
     if (!value) return deid;
     const overrides = ensureOverrides(deid);
     // Lifting a string everywhere has to withdraw the request to redact it
     // everywhere, or the two would sit in the record contradicting each other.
     overrides.on = overrides.on.filter((o) => o.text !== value);
-    if (!overrides.offText.some((o) => o.text === value)) overrides.offText.push({ text: value });
-    return deid;
-}
-
-/** Undo a document-wide dismissal. */
-export function restoreTextEverywhere(deid, text) {
-    if (!text) return deid;
-    const overrides = ensureOverrides(deid);
-    overrides.offText = overrides.offText.filter((o) => o.text !== text);
-    return deid;
+    dropExceptionsFor(deid, value);
+    const ids = [];
+    for (const unit of deid.units || []) {
+        for (const s of unit.spans || []) {
+            if (unit.text.slice(s.start, s.end) === value) ids.push(s.id);
+        }
+    }
+    return dismissSpans(deid, ids);
 }
 
 /** Drop every manual decision, returning the page to what Presidio proposed. */
 export function resetOverrides(deid) {
-    deid.overrides = { off: [], offText: [], on: [] };
+    deid.overrides = { off: [], on: [] };
     for (const unit of deid.units || []) {
         unit.spans = (unit.spans || []).filter((s) => !s.manual && !s.except);
     }
@@ -765,7 +779,7 @@ export function hasOverrides(deid) {
     const d = normalizeDeid(deid);
     if (!d) return false;
     const o = d.overrides;
-    if (o.off.length || o.offText.length || o.on.length) return true;
+    if (o.off.length || o.on.length) return true;
     return d.units.some((u) => (u.spans || []).some((s) => s.manual || s.except));
 }
 

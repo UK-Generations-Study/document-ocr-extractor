@@ -94,7 +94,10 @@ export function markPageText(ocrPage, reportCounts) {
                 // somewhere else in the report to reach. A string that occurs
                 // once behaves identically however it was stored, so calling
                 // it out would describe a difference the reader cannot act on.
-                spansReport: !!span.sources?.includes('doc')
+                // An exception is only meaningful because a report-wide
+                // redaction covers this string, so it counts as reaching the
+                // report just as a live match does.
+                spansReport: !!span.sources?.some((s) => s === 'doc' || s === 'except')
                     && (reportCounts?.get(text) ?? 0) > 1,
                 score: span.score,
             });
@@ -158,22 +161,36 @@ export function decorateMarks(root, marks) {
 
 const isException = (mark) => !!mark?.sources?.includes('except');
 
+/** A detection the abstractor decided against - as distinct from text they are
+ *  holding out of a redaction they made themselves. Both can be true of the
+ *  same words at once, which is why they are separate questions. */
+const isKeptDetection = (mark) => mark?.kind === 'off' && !!mark?.sources?.includes('auto');
+
+/**
+ * Three independent facts, three classes, any of which may combine: whether
+ * these words are being redacted, whether a detection here was overruled, and
+ * whether a report-wide redaction covers them. Choosing just one - as this
+ * used to - silently drops whichever fact came second, so a detection kept out
+ * of a report-wide redaction lost the outline that said it was ever detected.
+ */
 function markClass(mark) {
-    // An exception carries the report-wide colour without the fill: the string
-    // IS redacted across the report, and deliberately is not here. The dashed
-    // outline is not reused for it - that means one thing only, a detection the
-    // abstractor judged not to be personal information.
-    if (isException(mark)) return 'ov-redaction ov-redaction--except';
-    if (mark?.kind === 'off') return 'ov-redaction ov-redaction--off';
+    const cls = ['ov-redaction'];
+    if (mark?.kind === 'off') cls.push('ov-redaction--off');
+    if (isKeptDetection(mark)) cls.push('ov-redaction--detected');
     // Marked because its reach is the surprising part: a veil that carries no
     // marker affects only the text under it.
-    return mark?.spansReport ? 'ov-redaction ov-redaction--doc' : 'ov-redaction';
+    if (mark?.spansReport) cls.push('ov-redaction--doc');
+    return cls.join(' ');
 }
 
 function markTitle(mark) {
     const types = (mark.entityTypes || []).join(', ');
-    if (isException(mark)) return `${types} - redacted elsewhere in this report, kept here. Click to change.`;
-    if (mark.kind === 'off') return `${types} - not being redacted. Click to change.`;
+    if (mark.kind === 'off') {
+        const detected = isKeptDetection(mark) ? 'detected, but ' : '';
+        return isException(mark)
+            ? `${types} - ${detected}redacted elsewhere in this report and kept here. Click to change.`
+            : `${types} - ${detected}not being redacted. Click to change.`;
+    }
     if (mark.spansReport) return `${types} - redacted everywhere in this report. Click to change.`;
     // A hand-placed redaction that reaches no further than this one occurrence,
     // whether because it was scoped that way or because there is nothing else

@@ -31,7 +31,7 @@ import {
     addManualRedaction,
     countOccurrences,
     dismissSpans,
-    dismissTextEverywhere,
+    dismissMatchingSpans,
     exceptNthOccurrenceInPage,
     hasOverrides,
     markComposition,
@@ -44,7 +44,6 @@ import {
     removeManualRedaction,
     resetOverrides,
     restoreSpans,
-    restoreTextEverywhere,
     textOccursInPage,
     unexceptSpans,
 } from '../deid/deidentify.js';
@@ -840,6 +839,28 @@ function pageSectionEl(doc, pageIndex, page, ocr, restore = {}, reportCounts = n
             if (!deid) rendered.innerHTML = renderMd(nextText);
         });
 
+        /**
+         * Let go of any veil whose text is no longer the text it was drawn
+         * over.
+         *
+         * Typing against the trailing edge of a veil puts the new character
+         * INSIDE its element, because that is where the caret is - so the words
+         * just typed appear blacked out, as if the redaction had swallowed
+         * them. It has not: the stored span still covers what it always did,
+         * and the display corrects itself on the next save. But in a tool whose
+         * whole job is showing what will be removed, text that is not redacted
+         * must never look as though it is. So the moment a veil stops matching
+         * its span, it gives up its decoration and becomes plain text; the save
+         * that follows re-derives it properly.
+         */
+        const releaseEditedVeils = (root) => {
+            for (const el of root.querySelectorAll('.ov-redaction')) {
+                const mark = marked.marks[Number(el.dataset.markId)];
+                if (mark && el.textContent === mark.text) continue;
+                el.replaceWith(...el.childNodes);   // keeps the text, and the caret in it
+            }
+        };
+
         // Typing counts as having something to reset from the moment it is
         // typed, not from the blur that eventually saves it - the abstractor
         // has changed the report either way, and a Reset that only appears once
@@ -848,6 +869,7 @@ function pageSectionEl(doc, pageIndex, page, ocr, restore = {}, reportCounts = n
         // anything was actually kept.
         for (const pane of [rendered, rawEl]) {
             pane.addEventListener('input', () => {
+                releaseEditedVeils(pane);
                 document.getElementById('ov-reset')?.classList.remove('hidden');
             });
         }
@@ -951,20 +973,17 @@ function pageSectionEl(doc, pageIndex, page, ocr, restore = {}, reportCounts = n
                 const parts = markComposition(deid, mark.key, mark.start, mark.end);
                 await applyAcrossDoc((d) => {
                     for (const text of parts.docTexts) removeManualRedaction(d, text);
-                    // A detection dismissed report-wide needs the text-anchored
-                    // record; a manual redaction just goes away with its entry.
-                    if (parts.autoIds.length) dismissTextEverywhere(d, mark.text);
+                    // Detections have to be dismissed one by one; a manual
+                    // redaction just goes away with its entry.
+                    if (parts.autoIds.length) dismissMatchingSpans(d, mark.text);
                 });
             },
 
-            /** Put a dismissed span back into effect - here, or everywhere if
-             *  that is how it was lifted. */
+            /** Put a dismissed span back into effect - this one, and only this
+             *  one, however many were lifted together to get here. */
             restoreMark: async (mark) => {
-                const liftedEverywhere = (deid.overrides?.offText || [])
-                    .some((o) => o.text === mark.text);
                 restoreSpans(deid, mark.ids);
-                if (!liftedEverywhere) { await saveDeid(); return; }
-                await applyAcrossDoc((d) => restoreTextEverywhere(d, mark.text));
+                await saveDeid();
             },
 
             /** Widen a one-off redaction to the whole report. */

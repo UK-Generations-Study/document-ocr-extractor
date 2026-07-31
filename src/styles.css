@@ -32,37 +32,36 @@
 }
 .ov-redaction:hover { background: rgb(17 24 39 / 0.28); color: inherit; }
 
-/* A redaction that reaches beyond the text under it - the same string is
-   redacted elsewhere in the report too, so lifting it here lifts it there as
-   well. Marked because that reach is the surprising part: an unmarked veil
-   covers only the words it sits on. Applied only when the string really does
-   occur more than once (see markPageText); marking a redaction that happens to
-   have nowhere else to reach would warn about a consequence that cannot
-   happen, on most manual redactions, which is how a marker stops being read. */
-.ov-redaction--doc {
-    box-shadow: inset 0 -2px 0 0 rgb(253 224 71 / 0.85);
-}
-.ov-redaction--doc:hover { box-shadow: inset 0 -2px 0 0 rgb(202 138 4 / 0.85); }
+/* The three states below are independent and combine freely - the same words
+   can be a detection the abstractor overruled AND one occurrence held out of a
+   report-wide redaction, and the veil has to say both. Declared in this order
+   so that where two set an underline, the report-wide yellow is the one seen. */
 
-/* One occurrence deliberately kept out of a report-wide redaction. It carries
-   that redaction's yellow without its fill - the string is redacted across the
-   report, and on purpose is not here. Deliberately NOT the dashed outline
-   below, which says something else entirely: a detection judged wrong. */
-.ov-redaction--except {
-    background: transparent;
-    color: inherit;
-    box-shadow: inset 0 -2px 0 0 rgb(253 224 71 / 0.85);
-    border-radius: 0;
-}
-.ov-redaction--except:hover { background: rgb(253 224 71 / 0.25); }
-
-/* An auto-detected span the user dismissed: not redacted, but still shown so
-   the decision is visible rather than silent. Click to redact it again. */
+/* Not being redacted. Still marked, so the decision is visible rather than
+   silent, and can be clicked to change. */
 .ov-redaction--off {
     background: transparent;
     color: inherit;
     box-shadow: inset 0 -1px 0 0 rgb(107 114 128 / 0.9);
+}
+.ov-redaction--off:hover { background: rgb(17 24 39 / 0.12); }
+
+/* ...and Presidio had detected it. The dashed outline means this and only
+   this: a machine detection the abstractor judged not to be personal
+   information. */
+.ov-redaction--detected {
     outline: 1px dashed rgb(156 163 175 / 0.9);
     outline-offset: 1px;
 }
-.ov-redaction--off:hover { background: rgb(17 24 39 / 0.12); }
+
+/* Covered by a report-wide redaction - whether currently redacted (with the
+   fill) or held out of it as an exception (without). Marked because that reach
+   is the surprising part: an unmarked veil covers only the words it sits on.
+   Applied only when the string really does occur more than once (see
+   markPageText); marking a redaction that happens to have nowhere else to
+   reach would warn about a consequence that cannot happen, on most manual
+   redactions, which is how a marker stops being read. */
+.ov-redaction--doc {
+    box-shadow: inset 0 -2px 0 0 rgb(253 224 71 / 0.85);
+}
+.ov-redaction--doc:hover { box-shadow: inset 0 -2px 0 0 rgb(202 138 4 / 0.85); }
