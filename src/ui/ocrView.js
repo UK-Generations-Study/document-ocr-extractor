@@ -840,24 +840,45 @@ function pageSectionEl(doc, pageIndex, page, ocr, restore = {}, reportCounts = n
         });
 
         /**
-         * Let go of any veil whose text is no longer the text it was drawn
-         * over.
+         * Turn text typed against the edge of a veil back into ordinary text.
+     *
+         * The caret at a veil's trailing edge is INSIDE its element, so that is
+         * where the browser puts what you type next - and the new words come
+         * out blacked out, as though the redaction had swallowed them. It has
+         * not: the stored span still covers exactly what it did before. But in
+         * a tool whose whole job is showing what will be removed, text that is
+         * not redacted must never look as though it is.
          *
-         * Typing against the trailing edge of a veil puts the new character
-         * INSIDE its element, because that is where the caret is - so the words
-         * just typed appear blacked out, as if the redaction had swallowed
-         * them. It has not: the stored span still covers what it always did,
-         * and the display corrects itself on the next save. But in a tool whose
-         * whole job is showing what will be removed, text that is not redacted
-         * must never look as though it is. So the moment a veil stops matching
-         * its span, it gives up its decoration and becomes plain text; the save
-         * that follows re-derives it properly.
+         * Only the added characters move; the veil itself stays put over the
+         * words it belongs to. That keeps the pane showing what the SAVE will
+         * conclude, because the two rules agree: text appended at either edge
+         * falls outside the span once offsets are mapped through the edit,
+         * while a change made INSIDE the redacted words is absorbed into it
+         * (see mapSpan). So an edit in the middle is left alone, veil and all.
          */
-        const releaseEditedVeils = (root) => {
+        const detachTypedText = (root) => {
             for (const el of root.querySelectorAll('.ov-redaction')) {
                 const mark = marked.marks[Number(el.dataset.markId)];
-                if (mark && el.textContent === mark.text) continue;
-                el.replaceWith(...el.childNodes);   // keeps the text, and the caret in it
+                if (!mark || el.textContent === mark.text) continue;
+                el.normalize();
+                const node = el.firstChild;
+                if (el.childNodes.length !== 1 || node?.nodeType !== Node.TEXT_NODE) continue;
+                // Moving the caret is only right if it is the thing that put
+                // the text there; a redraw elsewhere must not steal it.
+                const typing = el.contains(window.getSelection()?.anchorNode);
+                if (node.data.startsWith(mark.text)) {
+                    const tail = document.createTextNode(node.data.slice(mark.text.length));
+                    node.data = mark.text;
+                    el.after(tail);
+                    if (typing) placeCaret(tail, tail.length);
+                } else if (node.data.endsWith(mark.text)) {
+                    const head = document.createTextNode(
+                        node.data.slice(0, node.data.length - mark.text.length),
+                    );
+                    node.data = mark.text;
+                    el.before(head);
+                    if (typing) placeCaret(head, head.length);
+                }
             }
         };
 
@@ -869,7 +890,7 @@ function pageSectionEl(doc, pageIndex, page, ocr, restore = {}, reportCounts = n
         // anything was actually kept.
         for (const pane of [rendered, rawEl]) {
             pane.addEventListener('input', () => {
-                releaseEditedVeils(pane);
+                detachTypedText(pane);
                 document.getElementById('ov-reset')?.classList.remove('hidden');
             });
         }
@@ -1037,6 +1058,16 @@ function resetPageRecord(rec) {
 }
 
 // ---------------------------------------------------------------- manual redaction
+
+/** Drop the caret at a point in a text node, discarding any selection. */
+function placeCaret(node, offset) {
+    const range = document.createRange();
+    range.setStart(node, offset);
+    range.collapse(true);
+    const sel = window.getSelection();
+    sel?.removeAllRanges();
+    sel?.addRange(range);
+}
 
 /** Shared floating action bar, created once. Holds one or two buttons: the
  *  action itself, and where the choice is real, the same action at the other
