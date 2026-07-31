@@ -148,6 +148,10 @@ How it behaves:
   the decision stays visible, and clicking it offers **Redact this** to put it
   back. Select any text and confirm **Redact** to remove something the analyzer
   missed. **Reset** returns the page to what Presidio proposed.
+- **A manual redaction applies to the whole document.** Redacting a string
+  means that string identifies someone, so every occurrence of it is redacted —
+  on every line and every page — and lifting it removes them all. Automatic
+  detections stay per-page, since those are per-page judgements.
 - Three views per page: **Rendered** (formatted) and **Raw** (Markdown source)
   are both editable and both show the veils, so you can redact from either;
   **Export** is a read-only preview of the text that will actually leave the

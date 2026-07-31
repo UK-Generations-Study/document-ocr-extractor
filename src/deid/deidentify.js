@@ -245,11 +245,12 @@ export function reanchorAfterEdit(deid, newText) {
         return true;
     });
 
-    // Manual redactions are text-anchored already; only their unit changes.
+    // Manual redactions are text-anchored and unit-independent, so they carry
+    // across an edit untouched.
     const seenOn = new Set();
     const on = (deid.overrides?.on || [])
         .filter((o) => o.text && !seenOn.has(o.text) && seenOn.add(o.text) !== undefined)
-        .map((o) => ({ key, text: o.text }));
+        .map((o) => ({ text: o.text }));
 
     return {
         deid: {
@@ -300,12 +301,17 @@ export function effectiveSpans(deid, unit, settings = getCachedSettings()) {
         (off.has(spanId(s)) ? dismissed : enabled).push(s);
     }
     // Manual redactions are anchored by TEXT, not offsets: the user selected
-    // something in the rendered view, where markdown decoration means DOM
-    // positions don't line up with source offsets. Matching the string inside
-    // its own unit avoids that mapping entirely, and redacting every
-    // occurrence within the unit is the expected reading of "redact this".
+    // something in a rendered view, where markdown decoration means DOM
+    // positions don't line up with source offsets. Matching the string avoids
+    // that mapping entirely.
+    //
+    // They are also NOT scoped to the unit (or the page) they were made in:
+    // "redact this" means the string is identifying, and an identifier that is
+    // sensitive in one line is sensitive in the next one and on the next page.
+    // The caller applies each entry to every page of the document; here it
+    // applies to every unit of this one.
     for (const o of overrides.on || []) {
-        if (o.key !== key || !o.text) continue;
+        if (!o.text) continue;
         for (const at of occurrencesOf(unit.text, o.text)) {
             enabled.push({ ...at, entityType: MANUAL_ENTITY, score: 1 });
         }
@@ -415,23 +421,49 @@ function ensureOverrides(deid) {
     return deid.overrides;
 }
 
-/** Stop redacting everything in [start, end) of a unit - the user's "this is
- *  not personal information after all". Auto spans are remembered as dismissed
- *  (so they can be shown as a faint outline and restored); manual ones are
- *  simply dropped. */
+/** Stop redacting the automatically-detected spans in [start, end) of a unit -
+ *  the user's "this is not personal information after all". They are remembered
+ *  as dismissed rather than deleted, so they can be shown as a faint outline
+ *  and restored. Dismissals are local to this page: an automatic detection is
+ *  a per-page judgement. Manual redactions are removed separately, by text,
+ *  because those are document-wide (see removeManualRedaction). */
 export function dismissRange(deid, key, start, end) {
     const unit = findUnit(deid, key);
     if (!unit) return deid;
     const overrides = ensureOverrides(deid);
-    overrides.on = overrides.on.filter((o) =>
-        o.key !== key || !occurrencesOf(unit.text, o.text).some((oc) => oc.start < end && start < oc.end),
-    );
     for (const s of unit.spans || []) {
         if (s.start >= end || start >= s.end) continue;
         if (!overrides.off.some((o) => o.key === key && o.start === s.start && o.end === s.end)) {
             overrides.off.push({ key, start: s.start, end: s.end });
         }
     }
+    return deid;
+}
+
+/** The manual redaction texts that fall inside [start, end) of a unit - what a
+ *  click on that veil should stop redacting, document-wide. */
+export function manualTextsInRange(deid, key, start, end) {
+    const unit = findUnit(deid, key);
+    if (!unit || !isCurrentSchema(deid)) return [];
+    return (deid.overrides?.on || [])
+        .map((o) => o.text)
+        .filter((text) => text && occurrencesOf(unit.text, text).some((oc) => oc.start < end && start < oc.end));
+}
+
+/** Whether a string appears in any analyzed unit of this page. A selection can
+ *  run across unit boundaries or over Markdown syntax, and such a string
+ *  matches nothing - worth telling the user rather than appearing to do
+ *  nothing at all. */
+export function textOccursInPage(deid, text) {
+    if (!isCurrentSchema(deid) || !text) return false;
+    return (deid.units || []).some((u) => u.text.includes(text));
+}
+
+/** Stop redacting a manually-added string on this page. */
+export function removeManualRedaction(deid, text) {
+    if (!text) return deid;
+    const overrides = ensureOverrides(deid);
+    overrides.on = overrides.on.filter((o) => o.text !== text);
     return deid;
 }
 
@@ -442,15 +474,14 @@ export function restoreRange(deid, key, start, end) {
     return deid;
 }
 
-/** Redact a piece of text the analyzer missed, anchored by string within its
- *  unit (see effectiveSpans for why text rather than offsets). */
-export function addManualRedaction(deid, key, text) {
+/** Redact a piece of text the analyzer missed, anchored by string rather than
+ *  offset (see effectiveSpans). Applies to every unit of this page; the caller
+ *  adds it to every page so the redaction covers the whole document. */
+export function addManualRedaction(deid, text) {
     const value = (text || '').trim();
     if (!value) return deid;
     const overrides = ensureOverrides(deid);
-    if (!overrides.on.some((o) => o.key === key && o.text === value)) {
-        overrides.on.push({ key, text: value });
-    }
+    if (!overrides.on.some((o) => o.text === value)) overrides.on.push({ text: value });
     return deid;
 }
 

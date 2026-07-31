@@ -32,12 +32,14 @@ import {
     dismissRange,
     hasOverrides,
     isCurrentSchema,
+    manualTextsInRange,
     reanchorAfterEdit,
     pageOutputText,
     redactionSummary,
+    removeManualRedaction,
     resetOverrides,
     restoreRange,
-    unitKey,
+    textOccursInPage,
 } from '../deid/deidentify.js';
 import { decorateMarks, markPageText } from '../deid/marks.js';
 import { confirmOcr } from './reviewFlow.js';
@@ -485,6 +487,14 @@ function pageSectionEl(doc, pageIndex, page, ocr, restore = {}) {
     // Turn the sentinels micromark passed through into veils / outlines.
     if (deid) decorateMarks(rendered, marked.marks);
 
+    // Baseline for detecting a rendered-pane edit. Compared against the
+    // turndown round-trip of what we just rendered, NOT the stored Markdown:
+    // turndown never reproduces its input byte for byte (escaping, emphasis
+    // markers), so comparing to the stored text would read as an edit on every
+    // blur and needlessly re-anchor. Captured after decoration so the veil
+    // elements are already in place.
+    const renderedBaseline = turndown.turndown(rendered.innerHTML).trim();
+
     const baseRecord = () => ({
         pageBlobKey: page.blobKey,
         docId: doc.id,
@@ -519,11 +529,69 @@ function pageSectionEl(doc, pageIndex, page, ocr, restore = {}) {
         if (mount) mount.scrollTop = paneScroll;
     };
 
-    /** Persist the page's redaction decisions and redraw. */
-    const saveDeid = async () => {
-        ocr.deid = deid;
-        await putOcrPage({ ...baseRecord(), markdown: originalText, source: ocr?.source || 'quick', deid });
-        refreshCard();
+    /**
+     * The text currently in the editor if it differs from what was rendered,
+     * else null. Needed because the floating redaction button suppresses
+     * mousedown so it survives its own click - which also means the editor
+     * never blurs, so an in-progress edit has NOT been saved by the time a
+     * redaction is applied. Writing the redaction without flushing it first
+     * would persist the stale text and silently discard the edit.
+     */
+    const pendingText = () => {
+        if (readonly) return null;
+        if (currentMode === 'raw') {
+            const next = rawEl.innerText.replace(/\n$/, '');
+            return next === initial ? null : next;
+        }
+        const next = turndown.turndown(rendered.innerHTML).trim();
+        return next === renderedBaseline ? null : next;
+    };
+
+    /** Persist the page's redaction decisions, flushing any unsaved edit. */
+    const saveDeid = async ({ redraw = true } = {}) => {
+        const edited = pendingText();
+        if (edited === null) {
+            ocr.deid = deid;
+            await putOcrPage({ ...baseRecord(), markdown: originalText, source: ocr?.source || 'quick', deid });
+        } else {
+            // Fold the edit and the redaction change into one write: re-anchor
+            // the (already-updated) overrides onto the edited text.
+            const { deid: next, lost } = reanchorAfterEdit(deid, edited);
+            ocr.markdown = edited;
+            ocr.deid = next;
+            ocr.source = 'edit';
+            await putOcrPage({ ...baseRecord(), markdown: edited, source: 'edit', deid: next });
+            if (lost) {
+                showToast(
+                    `${lost} redaction${lost === 1 ? '' : 's'} could not be re-applied after your edit - that text has changed.`,
+                    { tone: 'error', duration: 9000 },
+                );
+            }
+        }
+        if (redraw) refreshCard();
+    };
+
+    /**
+     * Apply or lift a manual redaction across EVERY page of the document.
+     * "Redact this" means the string identifies someone, which does not stop
+     * being true on the next line or the next page.
+     */
+    const saveManualAcrossDoc = async (texts, { remove = false } = {}) => {
+        await saveDeid({ redraw: false });   // flush any edit on this page first
+        const pages = await getOcrPagesByDoc(doc.id);
+        for (const rec of pages) {
+            if (!isCurrentSchema(rec.deid)) continue;
+            // The page we are on is represented by the live `ocr` object, whose
+            // deid we just wrote; use it rather than the copy read back.
+            const target = rec.pageBlobKey === page.blobKey ? ocr : rec;
+            for (const text of texts) {
+                if (remove) removeManualRedaction(target.deid, text);
+                else addManualRedaction(target.deid, text);
+            }
+            await putOcrPage(target);
+        }
+        // Other pages changed too, so redraw the whole pane rather than a card.
+        if (currentDocId) await renderFor(currentDocId, { force: true });
     };
 
     /** Save edited page text, carrying redactions across (see reanchorAfterEdit).
@@ -561,7 +629,6 @@ function pageSectionEl(doc, pageIndex, page, ocr, restore = {}) {
     // read as an edit on every blur and needlessly re-anchor.
     // Persist on blur so we don't hammer IndexedDB on every keystroke.
     if (!readonly) {
-        const renderedBaseline = turndown.turndown(rendered.innerHTML).trim();
         rendered.addEventListener('blur', async () => {
             const nextMd = turndown.turndown(rendered.innerHTML).trim();
             if (nextMd === renderedBaseline) return;
@@ -584,13 +651,44 @@ function pageSectionEl(doc, pageIndex, page, ocr, restore = {}) {
         // bound to a plain click, because a plain click has to place the text
         // cursor: select text to redact it, click inside a veil to keep it.
         // Wired on both editable panes so redacting works wherever you are.
+        const spanHandlers = {
+            /** Redact a selected string, everywhere in the document. */
+            redactText: async (text) => {
+                if (!textOccursInPage(deid, text)) {
+                    // The selection ran across unit boundaries or over Markdown
+                    // syntax, so it matches no analyzed text and redacting it
+                    // would do nothing at all. Say so rather than no-op.
+                    showToast(
+                        'That selection spans more than one piece of text (or includes Markdown syntax), so it cannot be redacted as one. Select within a single line or value.',
+                        { tone: 'error', duration: 9000 },
+                    );
+                    return;
+                }
+                await saveManualAcrossDoc([text]);
+            },
+            /** Flip an existing veil or dismissed outline. */
+            toggleMark: async (mark, dismissed) => {
+                if (dismissed) {
+                    restoreRange(deid, mark.key, mark.start, mark.end);
+                    await saveDeid();
+                    return;
+                }
+                // A veil can be automatic, manual, or both merged together.
+                // Automatic spans are dismissed for this page only; manual ones
+                // are lifted document-wide, matching how they were applied.
+                const manual = manualTextsInRange(deid, mark.key, mark.start, mark.end);
+                dismissRange(deid, mark.key, mark.start, mark.end);
+                if (manual.length) await saveManualAcrossDoc(manual, { remove: true });
+                else await saveDeid();
+            },
+        };
         for (const pane of [rendered, rawEl]) {
             // Deferred a tick: clicking ON an existing selection does not
             // collapse it until after mouseup, so reading the selection
             // synchronously would still see the old range and leave the button
             // showing over text the caret has already left.
             pane.addEventListener('mouseup', () => {
-                setTimeout(() => showSpanAction(pane, deid, marked.marks, saveDeid), 0);
+                setTimeout(() => showSpanAction(pane, marked.marks, spanHandlers), 0);
             });
             pane.addEventListener('keyup', hideSpanAction);
         }
@@ -653,38 +751,53 @@ function placeSpanAction(rect, label, onClick) {
  * The selection is anchored to the analyzed unit it sits in - the enclosing
  * .ov-unit wrapper, or the single whole-page unit when there is no wrapper.
  */
-function showSpanAction(pane, deid, marks, save) {
+function showSpanAction(pane, marks, handlers) {
     const sel = window.getSelection();
     if (!sel || !sel.anchorNode || !pane.contains(sel.anchorNode)) { hideSpanAction(); return; }
-    const anchorEl = sel.anchorNode.parentElement;
     const text = sel.isCollapsed ? '' : sel.toString().trim();
 
+    // A selection needs no unit: manual redactions are matched by text across
+    // the whole document, so a selection that runs over a veil or across
+    // Markdown syntax still produces an actionable string.
     if (text) {
-        const unitEl = anchorEl?.closest('.ov-unit');
-        const pageUnit = deid.units.find((u) => u.blockIndex < 0);
-        const key = unitEl?.dataset.unitKey || (pageUnit ? unitKey(pageUnit.blockIndex, pageUnit.path) : null);
-        if (!key) { hideSpanAction(); return; }
         placeSpanAction(sel.getRangeAt(0).getBoundingClientRect(), 'Redact', async () => {
-            addManualRedaction(deid, key, text);
             hideSpanAction();
             window.getSelection()?.removeAllRanges();
-            await save();
+            await handlers.redactText(text);
         });
         return;
     }
 
-    // Collapsed caret resting on an existing span: offer to flip it.
-    const markEl = anchorEl?.closest('.ov-redaction');
+    const markEl = markAtCaret(sel);
     if (!markEl) { hideSpanAction(); return; }
     const mark = marks[Number(markEl.dataset.markId)];
     if (!mark) { hideSpanAction(); return; }
     const dismissed = mark.kind === 'off';
     placeSpanAction(markEl.getBoundingClientRect(), dismissed ? 'Redact' : 'Unredact', async () => {
-        if (dismissed) restoreRange(deid, mark.key, mark.start, mark.end);
-        else dismissRange(deid, mark.key, mark.start, mark.end);
         hideSpanAction();
-        await save();
+        await handlers.toggleMark(mark, dismissed);
     });
+}
+
+/**
+ * The veil the collapsed caret is on, including when it sits against either
+ * edge of one.
+ *
+ * Clicking just after a span's last character leaves the caret inside that
+ * span's text node, but clicking just before its first character leaves it at
+ * the END of the preceding text node - outside the element. Without the
+ * adjacency checks the two edges behave differently, which is invisible to the
+ * user and reads as the click simply not working on the left-hand side.
+ */
+function markAtCaret(sel) {
+    const node = sel.anchorNode;
+    const direct = node.parentElement?.closest('.ov-redaction');
+    if (direct) return direct;
+    if (node.nodeType !== Node.TEXT_NODE) return null;
+    const isMark = (n) => (n?.nodeType === Node.ELEMENT_NODE && n.classList.contains('ov-redaction') ? n : null);
+    if (sel.anchorOffset === node.data.length) return isMark(node.nextSibling);
+    if (sel.anchorOffset === 0) return isMark(node.previousSibling);
+    return null;
 }
 
 function renderEmpty(mount) {
