@@ -522,7 +522,10 @@ function pageSectionEl(doc, pageIndex, page, ocr, restore = {}, reportCounts = n
     // in-memory page: every save below writes `ocr`, so the new shape is
     // persisted the first time the abstractor touches the page rather than
     // being re-derived on every render.
-    const deid = normalizeDeid(ocr?.deid);
+    // Reassigned whenever an edit is flushed: carrying redactions across an
+    // edit produces a NEW record, and a handler still holding the old one would
+    // act on a version of the page that no longer exists.
+    let deid = normalizeDeid(ocr?.deid);
     if (ocr && deid) ocr.deid = deid;
     const originalText = ocr?.markdown ?? '';
 
@@ -743,6 +746,7 @@ function pageSectionEl(doc, pageIndex, page, ocr, restore = {}, reportCounts = n
             const next = reanchorAfterEdit(ocr, deid, edited);
             ocr.markdown = edited;
             ocr.deid = next;
+            deid = next;
             ocr.source = 'edit';
             await putOcrPage({ ...baseRecord(), markdown: edited, source: 'edit', deid: next });
         }
@@ -795,12 +799,16 @@ function pageSectionEl(doc, pageIndex, page, ocr, restore = {}, reportCounts = n
             rememberOriginal();
             ocr.markdown = nextText;
             await putOcrPage({ ...baseRecord(), markdown: nextText, source: 'edit' });
+            // This branch does not rebuild the card, so the header would not
+            // otherwise notice the report now has something to reset.
+            syncResetButton(await getOcrPagesByDoc(doc.id));
             return;
         }
         rememberOriginal();
         const next = reanchorAfterEdit(ocr, deid, nextText);
         ocr.markdown = nextText;
         ocr.deid = next;
+        deid = next;
         ocr.source = 'edit';
         await putOcrPage({ ...baseRecord(), markdown: nextText, source: 'edit', deid: next });
         await refreshCard();
@@ -831,6 +839,18 @@ function pageSectionEl(doc, pageIndex, page, ocr, restore = {}, reportCounts = n
             await persistEditedText(nextText);
             if (!deid) rendered.innerHTML = renderMd(nextText);
         });
+
+        // Typing counts as having something to reset from the moment it is
+        // typed, not from the blur that eventually saves it - the abstractor
+        // has changed the report either way, and a Reset that only appears once
+        // they happen to click elsewhere reads as arbitrary. Only ever revealed
+        // here; hiding it again is for syncResetButton, which knows whether
+        // anything was actually kept.
+        for (const pane of [rendered, rawEl]) {
+            pane.addEventListener('input', () => {
+                document.getElementById('ov-reset')?.classList.remove('hidden');
+            });
+        }
     }
 
     if (deid) {
@@ -848,6 +868,12 @@ function pageSectionEl(doc, pageIndex, page, ocr, restore = {}, reportCounts = n
 
             /** Redact a selected string everywhere in the report. */
             redactEverywhere: async (text) => {
+                // The selection can be in text the abstractor has only just
+                // typed. Nothing has saved it - the panes persist on blur, and
+                // this bar suppresses blur so its own click survives - so the
+                // check below would be asking whether the string appears in a
+                // version of the page written before it was typed.
+                await saveDeid({ redraw: false });
                 if (!textOccursInPage(deid, text)) {
                     // The selection ran across unit boundaries or over Markdown
                     // syntax, so it matches no analyzed text and redacting it
@@ -863,6 +889,7 @@ function pageSectionEl(doc, pageIndex, page, ocr, restore = {}, reportCounts = n
 
             /** Redact only the occurrence that was selected. */
             redactOnce: async (text, index) => {
+                await saveDeid({ redraw: false });   // as above: it may be unsaved text
                 if (!redactNthOccurrenceInPage(deid, index, text)) {
                     showToast(
                         'That selection could not be pinned to one place. Nothing was redacted - select the text again, or redact it everywhere.',
