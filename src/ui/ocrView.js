@@ -52,7 +52,7 @@ import {
     unexceptMatching,
     unexceptSpans,
 } from '../deid/deidentify.js';
-import { decorateMarks, markPageText } from '../deid/marks.js';
+import { decorateMarks, isDrawnVeil, markPageText } from '../deid/marks.js';
 import { confirmOcr } from './reviewFlow.js';
 import { confirmDialog, showToast } from './toast.js';
 import { paneTabsHtml, wirePaneTabs } from './paneTabs.js';
@@ -896,6 +896,14 @@ function pageSectionEl(doc, pageIndex, page, ocr, restore = {}, reportCounts = n
          */
         const detachTypedText = (root) => {
             for (const el of root.querySelectorAll('.ov-redaction')) {
+                // A redaction is an element this pane drew. Anything else
+                // wearing the class was copied here by the browser - pasted
+                // from the clipboard, or left behind when a block was split
+                // around the caret - and covers nothing at all, whatever its
+                // attributes say. Losing the decoration is the whole point:
+                // text that is not redacted must not look as though it is.
+                if (!isDrawnVeil(el)) { discardVeilCopy(el); continue; }
+
                 // Compared against what THIS element was drawn over, not the
                 // redaction as a whole: one spanning several blocks is several
                 // elements, each holding its own piece.
@@ -905,33 +913,14 @@ function pageSectionEl(doc, pageIndex, page, ocr, restore = {}, reportCounts = n
                 const node = el.firstChild;
                 if (node?.data === was && el.childNodes.length === 1) continue;
 
-                // Pressing Enter at a veil's edge splits the block around the
-                // caret, and the browser carries the veil into BOTH halves -
-                // leaving a copy in the new line with no text in it. It covers
-                // nothing, so whatever is typed there next would come out
-                // looking redacted when it is not.
-                if (!el.textContent) {
-                    const sel = window.getSelection();
-                    const hadCaret = !!sel?.anchorNode && el.contains(sel.anchorNode);
-                    const block = el.parentElement;
-                    // Unwrapped rather than deleted: the split leaves its line
-                    // break INSIDE the copy, and taking that away with it left
-                    // a block with nothing in it at all - nowhere to put the
-                    // caret, no height, and Enter looking like it did nothing.
-                    unwrap(el);
-                    if (hadCaret && block && !block.textContent && !block.querySelector('br')) {
-                        block.appendChild(document.createElement('br'));
-                        placeCaret(block, 0);
-                    }
-                    continue;
-                }
-
                 // Anything but plain text inside means the edit restructured
                 // the element rather than added to it. Rather than reason about
                 // it, give up the decoration: the save re-derives the veil, and
                 // until then nothing claims to be redacted that is not.
-                if (el.childNodes.length !== 1 || node.nodeType !== Node.TEXT_NODE) {
-                    unwrap(el);
+                if (!el.textContent
+                    || el.childNodes.length !== 1
+                    || node.nodeType !== Node.TEXT_NODE) {
+                    discardVeilCopy(el);
                     continue;
                 }
 
@@ -965,6 +954,21 @@ function pageSectionEl(doc, pageIndex, page, ocr, restore = {}, reportCounts = n
             pane.addEventListener('input', () => {
                 detachTypedText(pane);
                 document.getElementById('ov-reset')?.classList.remove('hidden');
+            });
+
+            // Paste arrives as plain text. What is stored for a page is
+            // Markdown, so formatting that comes in with a copy has nowhere to
+            // be kept and vanishes at the next redraw - harmless for a colour,
+            // except that copying a redaction copies the black veil over it.
+            // Pasted text would land looking as though it were being removed
+            // when nothing of the sort is stored, which is the one thing this
+            // pane must never show. Dropping the formatting keeps what is on
+            // screen equal to what will be exported.
+            pane.addEventListener('paste', (ev) => {
+                const text = ev.clipboardData?.getData('text/plain');
+                if (typeof text !== 'string') return;
+                ev.preventDefault();
+                document.execCommand('insertText', false, text);
             });
         }
     }
@@ -1175,6 +1179,27 @@ function resetPageRecord(rec) {
 }
 
 // ---------------------------------------------------------------- manual redaction
+
+/**
+ * Strip the decoration from something wearing a veil's markup that is not one,
+ * leaving its text exactly where it is.
+ *
+ * A block split around the caret leaves its line BREAK inside the copy, so the
+ * copy is unwrapped rather than deleted - taking the break away with it left a
+ * block with nothing in it at all, which has nowhere to put the caret and
+ * collapses to no height, making Enter look as though it did nothing. If a
+ * block still ends up empty, it is given a break of its own.
+ */
+function discardVeilCopy(el) {
+    const sel = window.getSelection();
+    const hadCaret = !!sel?.anchorNode && el.contains(sel.anchorNode);
+    const block = el.parentElement;
+    unwrap(el);
+    if (hadCaret && block && !block.textContent && !block.querySelector('br')) {
+        block.appendChild(document.createElement('br'));
+        placeCaret(block, 0);
+    }
+}
 
 /**
  * Replace an element with its own children, keeping the caret where it was.

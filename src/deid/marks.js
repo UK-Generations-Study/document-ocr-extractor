@@ -150,6 +150,20 @@ export function decorateMarks(root, marks) {
     stripStraySentinels(root);
 }
 
+/**
+ * The veil elements this module actually drew.
+ *
+ * A veil the browser copied - pasted from the clipboard, or left behind when a
+ * block was split around the caret - is a different object wearing the same
+ * class and the same data attributes. Attributes cannot tell the two apart:
+ * they are precisely what a copy brings with it. Membership of this set is not
+ * serialized into HTML and is not carried by cloneNode, so it is.
+ */
+const drawnVeils = new WeakSet();
+
+/** Whether this element is a redaction, as opposed to a copy of one. */
+export const isDrawnVeil = (el) => drawnVeils.has(el);
+
 const isException = (mark) => !!mark?.sources?.includes('except');
 
 /** A detection the abstractor decided against - as distinct from text they are
@@ -251,6 +265,7 @@ function wrapMarkedText(root, byId) {
             el.dataset.veilText = token.value;
             el.textContent = token.value;
             if (mark) el.title = markTitle(mark);
+            drawnVeils.add(el);
             frag.appendChild(el);
         }
         target.replaceWith(frag);
