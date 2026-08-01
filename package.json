@@ -10,6 +10,7 @@
     "build": "vite build",
     "fetch-models": "node scripts/fetch-models.mjs",
     "preview": "vite preview",
+    "test": "node scripts/run-tests.mjs",
     "typecheck": "tsc --noEmit"
   },
   "repository": {
