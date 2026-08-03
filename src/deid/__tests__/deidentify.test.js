@@ -136,6 +136,39 @@ section('unredact everywhere');
     check('all three shown as dismissed', dismissed.length, 3);
 }
 
+// The analyzer readily returns more than one detection over the same words - a
+// date, and the year inside it - and a veil is the merge of all of them. Naming
+// only the span that spells the whole thing left the shorter one in force, the
+// veil still drawn, and lifting looking as though it had done nothing.
+section('unredact everywhere, where two detections share the words');
+{
+    const rec = pageRecord();
+    const first = PAGE.indexOf('1234');
+    const second = PAGE.indexOf('1234', first + 4);
+    rec.deid.units[0].spans = [
+        { id: 'whole1', start: first, end: first + 4, entityType: 'PHONE_NUMBER', score: 0.85 },
+        { id: 'part1', start: first, end: first + 2, entityType: 'PHONE_NUMBER', score: 0.6 },
+        { id: 'whole2', start: second, end: second + 4, entityType: 'PHONE_NUMBER', score: 0.85 },
+    ];
+    check('two veils, the first merged from two spans', enabledTexts(rec), ['1234', '1234']);
+    dismissMatchingSpans(rec.deid, '1234');
+    check('both lift, sub-span and all', enabledTexts(rec), []);
+}
+
+// ...but a detection reaching BEYOND the words stays: lifting these words is no
+// reason to stop redacting the rest of a longer finding somewhere else.
+section('a longer finding around the same words is left alone');
+{
+    const rec = pageRecord();
+    const at = PAGE.indexOf('1234');
+    rec.deid.units[0].spans = [
+        { id: 'inner', start: at, end: at + 4, entityType: 'PHONE_NUMBER', score: 0.9 },
+        { id: 'outer', start: at - 4, end: at + 4, entityType: 'PERSON', score: 0.9 },
+    ];
+    dismissMatchingSpans(rec.deid, '1234');
+    check('the longer one still redacts', enabledTexts(rec), ['Ref 1234']);
+}
+
 section('narrowing everywhere -> here, and widening back');
 {
     const rec = pageRecord();

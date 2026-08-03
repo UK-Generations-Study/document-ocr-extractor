@@ -788,6 +788,17 @@ export function restoreSpans(deid, ids) {
  * the string, so that any ONE of them can be put back afterwards without
  * disturbing the rest. Nothing is lost by settling it now: Presidio runs once,
  * so no later detection could match a rule left standing.
+ *
+ * What counts as matching is every span the words CONTAIN, not only those
+ * whose text is exactly them. The analyzer readily returns more than one
+ * detection over the same words - a date, and the year inside it - and a veil
+ * is the merge of all of them, so naming only the span that spells the whole
+ * thing left the shorter one in force and the veil still drawn. Lifting looked
+ * like it had done nothing at all.
+ *
+ * A span reaching BEYOND the words is deliberately left alone: elsewhere in the
+ * report the same string may sit inside a longer finding, and lifting these
+ * words is not a reason to stop redacting the rest of that one.
  */
 export function dismissMatchingSpans(deid, text) {
     const value = text || '';
@@ -799,8 +810,10 @@ export function dismissMatchingSpans(deid, text) {
     dropExceptionsFor(deid, value);
     const ids = [];
     for (const unit of deid.units || []) {
-        for (const s of unit.spans || []) {
-            if (unit.text.slice(s.start, s.end) === value) ids.push(s.id);
+        for (const at of occurrencesOf(unit.text, value)) {
+            for (const s of unit.spans || []) {
+                if (s.start >= at.start && s.end <= at.end) ids.push(s.id);
+            }
         }
     }
     return dismissSpans(deid, ids);
