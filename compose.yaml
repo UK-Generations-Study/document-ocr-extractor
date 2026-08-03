@@ -1,0 +1,84 @@
+# Air-gapped Document OCR Extractor: the app and its de-identification service.
+#
+# This file RUNS pre-built images; it never builds them. That is deliberate -
+# it is the only file besides the image tarball that has to be copied to the
+# air-gapped host, and there is no build context there to go missing.
+#
+# On a networked machine:      scripts/build-airgap.ps1
+# On the air-gapped machine:   docker load -i airgap-bundle.tar
+#                              docker compose up -d
+#                              # then open http://localhost:7777
+#
+# The analyzer takes a few seconds to start serving (measured: ~5s from
+# `compose up` to a successful /analyze). Requests that arrive before then get
+# a 502 from the proxy, and de-identification fails closed rather than letting
+# a document through un-redacted - so give it a moment before loading work.
+
+services:
+  # The app itself: nginx serving the built site, with every OCR model weight
+  # baked in. It also reverse-proxies /presidio to the analyzer below (see
+  # docker/nginx.conf) - Presidio sends no CORS headers, so the browser can
+  # only reach it through this same origin.
+  app:
+    image: document-ocr-extractor:latest
+    container_name: doe-app
+    # Fail loudly if the image was never loaded, rather than hanging on a
+    # registry this host cannot reach.
+    pull_policy: never
+    restart: unless-stopped
+    ports:
+      # Bound to 127.0.0.1: the page must be opened as http://localhost:7777.
+      # localhost is a secure context, which the OCR engines require for
+      # SharedArrayBuffer; the same container reached over plain HTTP from
+      # another machine is not, and OCR would refuse to start.
+      - "127.0.0.1:7777:80"
+    depends_on:
+      # Started, not healthy: nginx resolves the analyzer per-request, so the
+      # app serves fine while the analyzer is still warming up.
+      - analyzer
+    networks:
+      # Both: `frontend` carries the published port, `deid` reaches the
+      # analyzer. See the note on the networks below for why it takes two.
+      - frontend
+      - deid
+
+  # Presidio analyzer with the clinical de-identification model baked in.
+  # Built from docker/presidio/Dockerfile.
+  analyzer:
+    image: document-ocr-extractor-presidio:latest
+    container_name: doe-analyzer
+    pull_policy: never
+    restart: unless-stopped
+    # NO published ports. This service accepts unauthenticated requests and
+    # would analyze anything sent to it, so it is reachable only from the app
+    # container, over the internal network below.
+    expose:
+      - "3000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:3000/health')"]
+      interval: 30s
+      timeout: 10s
+      # Startup is quick in practice (~5s), but loading half a gigabyte of
+      # model weights off a slow disk is the kind of thing that gets slower on
+      # someone else's hardware. The headroom costs nothing.
+      start_period: 120s
+      retries: 3
+    networks:
+      - deid
+
+networks:
+  # The analyzer's only network. `internal` attaches no gateway, so nothing on
+  # it can reach anything off it - the container holding the model weights has
+  # no route out, by construction rather than by trust.
+  deid:
+    driver: bridge
+    internal: true
+
+  # The app needs a second, non-internal network purely to publish its port:
+  # Docker cannot map a host port to a container that is only on an internal
+  # network (tested - `docker port` comes back empty and the port is dead).
+  # That does leave the app container with a gateway. It is nginx serving
+  # static files and proxying to the analyzer, and makes no outbound requests
+  # of its own; on the air-gapped host there is nowhere for it to go anyway.
+  frontend:
+    driver: bridge

@@ -2,18 +2,26 @@
 #
 # Produces a ~1.8 GB image that serves the app with every model weight baked
 # in, so the running container needs no network access at all. OCR and all
-# document data stay in the operator's browser; this image is purely a static
-# file server.
+# document data stay in the operator's browser; this image is a static file
+# server plus a reverse proxy to the Presidio analyzer container.
 #
 # BUILD THIS ON A NETWORKED MACHINE (it downloads ~1.64 GB of model weights),
 # then transfer the image to the air-gapped host - see the README.
 #
+# This image is half of the deployment: de-identification lives in a second
+# image built from docker/presidio/, and compose.yaml in the repo root runs
+# the pair. scripts/build-airgap.ps1 builds both and saves them as one
+# tarball, which is the intended way in:
+#
+#   scripts/build-airgap.ps1
+#   # ...copy airgap-bundle.tar and compose.yaml across...
+#   docker load -i airgap-bundle.tar
+#   docker compose up -d
+#   # then open http://localhost:7777
+#
+# To build just this image by hand:
+#
 #   docker build -t document-ocr-extractor:latest .
-#   docker save document-ocr-extractor:latest | gzip > doe.tar.gz
-#   # ...copy doe.tar.gz across...
-#   docker load < doe.tar.gz
-#   docker run --rm -p 8080:80 document-ocr-extractor:latest
-#   # then open http://localhost:8080
 #
 # Build args let you trade image size against capability:
 #   FETCH_DEEP=--deep   vendor the Deep Read VLM too (default; +1.37 GB)

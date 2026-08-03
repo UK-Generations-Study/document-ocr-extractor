@@ -166,8 +166,8 @@ export async function openSettingsPanel(deps) {
                             </button>
                         </div>
                         <p id="sp-deid-status" class="mt-1 text-xs text-gray-500">
-                            Same-origin path proxied to the Presidio analyzer and anonymizer
-                            containers. The services cannot be called directly from the browser
+                            Same-origin path proxied to the Presidio analyzer container.
+                            The service cannot be called directly from the browser
                             (no CORS headers), so this must stay a same-origin path.
                         </p>
                     </div>
@@ -352,10 +352,10 @@ function wireDeidControls(mount, settings) {
     });
 
     mount.querySelector('#sp-deid-test').addEventListener('click', async () => {
-        setStatus('Contacting the Presidio services…', null);
+        setStatus('Contacting the Presidio analyzer…', null);
         try {
             await checkHealth({ base: urlInput.value.trim() || '/presidio' });
-            setStatus('Analyzer and anonymizer both reachable.', 'ok');
+            setStatus('Analyzer reachable, and detecting.', 'ok');
         } catch (err) {
             setStatus(err?.message || 'Could not reach the service.', 'error');
         }

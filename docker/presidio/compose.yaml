@@ -1,17 +1,23 @@
-# Presidio services for the de-identification feature.
+# Presidio analyzer for the de-identification feature, in DEVELOPMENT.
 #
 #   docker compose -f docker/presidio/compose.yaml up -d --build
 #
-# The analyzer is built from ./Dockerfile (clinical model + UK recognizers);
-# the anonymizer is the stock image - it applies operators and needs no model.
+# The analyzer is built from ./Dockerfile (clinical model + UK recognizers).
+# Only the analyzer is needed: it finds the PII spans, and the app derives the
+# redacted text from them itself (src/deid/deidentify.js), byte-identically to
+# what the anonymizer's `replace` operator would have returned. Nothing in the
+# app calls /anonymize, so that service is not run.
 #
-# Ports match the app's default dev proxy (see vite.config.js):
+# Port 5002 matches the app's default dev proxy (see vite.config.js):
 #   5002 -> analyzer    (/analyze, /supportedentities, /health)
-#   5001 -> anonymizer  (/anonymize)
 #
-# Both bind to 127.0.0.1 only. These services accept unauthenticated requests
-# and would happily analyze anything sent to them, so they should not be
-# reachable from outside the host.
+# It binds to 127.0.0.1 only. This service accepts unauthenticated requests
+# and would happily analyze anything sent to it, so it should not be reachable
+# from outside the host.
+#
+# For the air-gapped deployment, see compose.yaml in the repo root instead -
+# there the analyzer publishes no port at all and is reached only through the
+# app container's nginx.
 
 services:
   analyzer:
@@ -25,14 +31,7 @@ services:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:3000/health')"]
       interval: 30s
       timeout: 10s
-      # The transformer is loaded on the first request, so allow a generous
-      # start period before failures count.
-      start_period: 180s
+      # Startup is quick in practice (~5s), but half a gigabyte of model
+      # weights off a slow disk could take longer elsewhere. Headroom is free.
+      start_period: 120s
       retries: 3
-
-  anonymizer:
-    image: mcr.microsoft.com/presidio-anonymizer:latest
-    container_name: presidio-anonymizer
-    restart: unless-stopped
-    ports:
-      - "127.0.0.1:5001:3000"

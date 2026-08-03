@@ -16,6 +16,11 @@ models
 # User-provided pathology data - must never enter an image.
 input_data
 
+# Saved image bundles (scripts/build-airgap.ps1 writes here by default).
+# Multi-GB, and COPY . . would otherwise fold the previous build into the next
+# one.
+*.tar
+
 *.log
 npm-debug.log*
 .DS_Store

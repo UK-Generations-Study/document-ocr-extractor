@@ -72,7 +72,10 @@ constants in `scripts/prepare-build.mjs`).
 
 The app can strip personal identifiers out of the OCR text using
 [Presidio](https://github.com/data-privacy-stack/presidio). It uses the
-**analyzer and anonymizer services only** — not the image redactor.
+**analyzer service only** — not the anonymizer, and not the image redactor.
+The analyzer finds the PII spans; the app derives the redacted text from them
+itself, byte-identically to what the anonymizer's `replace` operator would
+have returned.
 
 De-identification sits between the two halves of the OCR pipeline. That
 pipeline produces a list of blocks (heading / paragraph / key-value / table),
@@ -85,7 +88,7 @@ the redacted page keeps the exact structure of the original.
 Only the text is redacted — page images are left untouched, since the text is
 the only thing that gets exported.
 
-Run the two services:
+Run the analyzer:
 
 ```bash
 docker compose -f docker/presidio/compose.yaml up -d --build
@@ -95,9 +98,8 @@ Then enable it in **Settings → De-identification** and press **Test**.
 
 ### Detection models
 
-The **anonymizer** applies no model — it is a deterministic operator engine
-that replaces the spans it is given. All the intelligence is in the
-**analyzer**, and `docker/presidio/` builds a customised one:
+All the intelligence is in the analyzer, and `docker/presidio/` builds a
+customised one:
 
 - **Names, dates, places** come from
   [`StanfordAIMI/stanford-deidentifier-base`](https://huggingface.co/StanfordAIMI/stanford-deidentifier-base)
@@ -127,11 +129,11 @@ well on generic text but drop to roughly 0.41 F1 on clinical notes, so they
 were not used here. `obi/deid_roberta_i2b2` is a comparable clinical
 alternative if you ever want to A/B it.
 
-The services send no CORS headers, so the browser cannot call them directly.
+The service sends no CORS headers, so the browser cannot call it directly.
 Everything goes through the same-origin `/presidio` path, which the Vite dev
-server proxies (see `vite.config.js`; override with `PRESIDIO_ANALYZER_URL` /
-`PRESIDIO_ANONYMIZER_URL`). This also keeps the page cross-origin-isolated,
-which the OCR engines require.
+server proxies (see `vite.config.js`; override with `PRESIDIO_ANALYZER_URL`)
+and which nginx proxies in the Docker image (`docker/nginx.conf`). This also
+keeps the page cross-origin-isolated, which the OCR engines require.
 
 How it behaves:
 
@@ -189,9 +191,7 @@ than you'd expect — `Dr A Patel` is typically returned as just `Patel`, leavin
 `Dr A` in place. Review the redactions on real reports and widen the entity
 selection if needed.
 
-> The air-gapped Docker image does not yet bundle Presidio — enabling
-> de-identification there needs the two services running alongside it and
-> nginx proxying `/presidio`.
+The air-gapped deployment bundles the analyzer alongside the app — see below.
 
 ## Sample data
 
@@ -215,42 +215,71 @@ end. The synthetic pages were produced by `sample_reports/generate_reports.py`.
 
 ## Air-gapped Docker deployment
 
-The `Dockerfile` builds a self-contained image that serves the app with every
-model weight baked in, so the running container needs **no network access**.
-It is an OCR appliance: ingest, OCR, review and export, with **no LLM field
-extraction** (nothing to reach on an isolated network) — the setup wizard is
-skipped and Export emits the reviewed OCR text instead of extracted fields.
+Two images, run together by `compose.yaml` in the repo root:
 
-All computation still happens in the operator's **browser**; the container is
-only a static file server. The host therefore needs a WebGPU-capable browser
-(recent Chrome/Edge).
+| Image | Built from | Contains |
+| --- | --- | --- |
+| `document-ocr-extractor` | `Dockerfile` | The built app, every OCR model weight, nginx |
+| `document-ocr-extractor-presidio` | `docker/presidio/` | Presidio analyzer, torch, the clinical de-identification model |
 
-Build on a networked machine (it downloads ~1.64 GB of weights), then move it:
+Both are fully self-contained: **neither needs network access at runtime**, and
+compose puts them on an `internal` network with no route out, so they cannot
+reach anything even on a host that does have one.
 
-```bash
-docker build -t document-ocr-extractor:latest .
-docker save document-ocr-extractor:latest | gzip > doe.tar.gz
+It is an OCR appliance: ingest, OCR, de-identify, review and export, with **no
+LLM field extraction** (nothing to reach on an isolated network) — the setup
+wizard is skipped and Export emits the reviewed OCR text instead of extracted
+fields.
+
+OCR still happens in the operator's **browser**; the app container is a static
+file server plus the `/presidio` proxy. The host therefore needs a
+WebGPU-capable browser (recent Chrome/Edge). De-identification is the one part
+that runs server-side, in the analyzer container.
+
+### Build (on a networked machine)
+
+```powershell
+scripts/build-airgap.ps1
 ```
 
-Copy `doe.tar.gz` to the air-gapped host, then:
+That builds both images for `linux/amd64` and saves them into one
+`airgap-bundle.tar`. Add `-QuickReadOnly` to omit the Deep Read VLM, or
+`-OutFile` to write it elsewhere. Expect a long first run: it downloads
+~1.64 GB of OCR weights, the clinical model, and CPU torch.
+
+### Run (on the air-gapped machine)
+
+Copy `airgap-bundle.tar` **and** `compose.yaml` across, then:
 
 ```bash
-docker load < doe.tar.gz
-docker run -d --name doe -p 8080:80 document-ocr-extractor:latest
+docker load -i airgap-bundle.tar
+docker compose up -d
 ```
 
-Open **http://localhost:8080** on that machine.
+Open **http://localhost:7777** on that machine. De-identification is on by
+default; **Settings → De-identification → Test** confirms the analyzer is
+reachable and actually detecting.
 
-Two constraints worth knowing:
+### Things worth knowing before you carry it over
 
+- **Give the analyzer a moment.** Measured at ~5 seconds from `compose up` to
+  a working `/analyze`. Requests before then get a 502 and de-identification
+  fails closed, so don't load documents the instant the containers start.
 - **Use `localhost`.** The OCR engines need `SharedArrayBuffer`, which browsers
   only expose on a cross-origin-isolated *and* secure page. `http://localhost`
   counts as secure; reaching the container over plain HTTP from another machine
   does not, and OCR will refuse to start. Serving to other hosts requires HTTPS
-  with a trusted certificate.
-- **Image size.** ~1.8 GB by default, including the Deep Read VLM. Build with
-  `--build-arg FETCH_DEEP=` to omit it and ship ~270 MB of models instead
-  (Quick Read only, roughly a 450 MB image).
+  with a trusted certificate. The published port is bound to `127.0.0.1` to
+  make that explicit.
+- **Bundle size.** ~1.8 GB for the app image including the Deep Read VLM, plus
+  the analyzer image (torch and the clinical model dominate it). Use
+  `-QuickReadOnly` to drop ~1.37 GB if Deep Read isn't needed for this run.
+- **De-identification fails closed.** If the analyzer is unreachable, documents
+  stop at `ocr-failed` rather than silently going through un-redacted. Turn it
+  off in Settings if you deliberately want to run without it.
+- **The analyzer publishes no port.** It accepts unauthenticated requests and
+  would analyze anything sent to it, so it is reachable only from the app
+  container, through nginx.
 
 To vendor the weights outside Docker (e.g. for an offline `npm run preview`):
 

@@ -44,3 +44,6 @@ public/schemas/
 # public/models/. Regenerated on demand; the patched copy in public/ is
 # what the app serves.
 models/
+
+# Saved Docker image bundles for the air-gapped transfer (multi-GB).
+*.tar

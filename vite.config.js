@@ -22,22 +22,19 @@ const coiHeaders = {
 /**
  * De-identification (Presidio) reverse proxy.
  *
- * The Presidio containers serve no CORS headers, so the browser cannot call
- * them cross-origin. Everything goes through the same-origin '/presidio' path
- * instead, which we forward here in dev/preview (nginx does the same job in
- * the Docker image). /anonymize goes to the anonymizer service, everything
- * else (/analyze, /supportedentities, /health) to the analyzer.
+ * The Presidio container serves no CORS headers, so the browser cannot call it
+ * cross-origin. Everything goes through the same-origin '/presidio' path
+ * instead, which we forward here in dev/preview (docker/nginx.conf does the
+ * same job in the Docker image). Only the analyzer is involved — /analyze,
+ * /supportedentities and /health; the app derives the redacted text itself
+ * rather than calling the anonymizer service.
  *
- * Point these at your services with PRESIDIO_ANALYZER_URL /
- * PRESIDIO_ANONYMIZER_URL if they aren't on the default ports.
+ * Point this at your service with PRESIDIO_ANALYZER_URL if it isn't on the
+ * default port.
  */
 const analyzerTarget = process.env.PRESIDIO_ANALYZER_URL || 'http://localhost:5002';
-const anonymizerTarget = process.env.PRESIDIO_ANONYMIZER_URL || 'http://localhost:5001';
 const stripPresidio = (p) => p.replace(/^\/presidio/, '');
-// Key order matters: Vite matches by prefix, so the more specific
-// '/presidio/anonymize' must be declared before the '/presidio' catch-all.
 const presidioProxy = {
-  '/presidio/anonymize': { target: anonymizerTarget, changeOrigin: true, rewrite: stripPresidio },
   '/presidio': { target: analyzerTarget, changeOrigin: true, rewrite: stripPresidio },
 };
 
