@@ -425,12 +425,17 @@ function deepButtonHtml(anyDeep, st) {
         return `
 <span class="text-xs text-purple-700">Downloading Deep OCR model${pct ? ` &middot; ${pct}%` : '&hellip;'}</span>`;
     }
-    const label = anyDeep ? 'Re-run Deep OCR' : 'Improve with Deep OCR';
+    // Nothing is offered once it has been run: the same model over the same
+    // page images produces the same reading, so a second pass would spend
+    // minutes to arrive back where it started - and would discard the
+    // redaction decisions made since, for nothing. The per-page "deep" badge
+    // is what says it has been done.
+    if (anyDeep) return '';
     return `
 <button id="ov-deep" type="button"
     class="rounded-md border border-purple-300 bg-purple-50 px-3 py-1.5 text-xs font-medium text-purple-800 hover:bg-purple-100"
     title="Run the higher-quality VLM (~1.4 GB one-time download, cached after)">
-    ${label}
+    Improve with Deep OCR
 </button>`;
 }
 

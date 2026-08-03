@@ -13,10 +13,19 @@
  * quick row for the same pageBlobKey - the schema keys by pageBlobKey, so
  * putOcrPage overwrites. If the abstractor prefers the quick output, they can
  * re-run Quick Read via the queue's re-run path (Phase 5).
+ *
+ * That replacement is why the new page is de-identified here before it is
+ * written. Overwriting the row took the de-identification of the old one with
+ * it, leaving a page of text with no findings, no export preview and no way to
+ * redact anything - and the review pane has no way to tell that apart from a
+ * page where nothing was found. A page must never reach it carrying text that
+ * has not been analyzed.
  */
 import { DeepClient, DeepCancelled } from './workers/deep-client.ts';
 import { emitAppEvent } from '../core/bus.js';
-import { getBlob, getDocument, putOcrPage } from '../db.js';
+import { getBlob, getDocument, getOcrPage, putOcrPage } from '../db.js';
+import { deidentifyPage, normalizeDeid } from '../deid/deidentify.js';
+import { getSettings } from '../core/settings.js';
 
 let client = null;
 let loading = null;   // Promise resolving to the loaded client
@@ -120,6 +129,7 @@ async function processDeep(docId) {
     }
 
     const pages = doc.pages || [];
+    const settings = await getSettings();
     let failed = false;
     for (let i = 0; i < pages.length; i++) {
         const page = pages[i];
@@ -135,7 +145,7 @@ async function processDeep(docId) {
             const result = await c.run(`doc:${docId}/page:${i + 1}`, url, {
                 onPhase: (phase, index, total) => emit({ type: 'phase', docId, pageIndex: i, phase, index, total }),
             });
-            await putOcrPage({
+            const record = {
                 pageBlobKey: page.blobKey,
                 docId,
                 markdown: result.markdown || '',
@@ -150,7 +160,12 @@ async function processDeep(docId) {
                 fellBack: result.fellBack,
                 note: result.note,
                 updatedAt: Date.now(),
-            });
+            };
+            if (settings.deidEnabled) {
+                emit({ type: 'phase', docId, pageIndex: i, phase: 'de-identifying' });
+                record.deid = await deidentifyForDeep(record, page.blobKey, settings);
+            }
+            await putOcrPage(record);
             emit({ type: 'page-done', docId, pageIndex: i, pipeline: result.pipeline });
         } catch (err) {
             if (err instanceof DeepCancelled) {
@@ -166,6 +181,32 @@ async function processDeep(docId) {
     }
 
     emit({ type: 'doc-done', docId, failed });
+}
+
+/**
+ * De-identify a freshly read page, keeping what the abstractor already decided
+ * that still means anything.
+ *
+ * The findings themselves cannot carry over: they describe positions in a
+ * reading of the page that has just been thrown away, and the machine gets a
+ * fresh look at better text. A decision to redact a STRING throughout the
+ * report is different in kind - it says those characters identify someone,
+ * which is true of the report and not of any one reading of it - so it is
+ * carried across. Losing it would quietly un-redact something the abstractor
+ * had asked for by name.
+ *
+ * Per-occurrence decisions are not carried: they point into text that no longer
+ * exists. Deep Read is normally run before review for exactly that reason.
+ *
+ * Throws if the analyzer is unreachable, which fails the page rather than
+ * writing text nobody has looked at for identifiers.
+ */
+async function deidentifyForDeep(record, pageBlobKey, settings) {
+    const deid = await deidentifyPage(record, { base: settings.deidBaseUrl });
+    const previous = normalizeDeid((await getOcrPage(pageBlobKey))?.deid);
+    const reportWide = previous?.overrides?.on || [];
+    if (reportWide.length) deid.overrides.on = reportWide.map((o) => ({ ...o }));
+    return deid;
 }
 
 /** Cancel the in-flight page (leaves earlier pages of this document written). */
