@@ -27,7 +27,9 @@ import {
 } from './src/db.js';
 import { onAppEvent } from './src/core/bus.js';
 import { getSettings } from './src/core/settings.js';
-import { OCR_ONLY } from './src/core/flags.js';
+import { canExtract, canRead } from './src/core/flags.js';
+import { getPipelineMode } from './src/core/mode.js';
+import { openModePicker } from './src/ui/modePicker.js';
 import { EXTRACTION_PANE_STATUSES } from './src/core/status.js';
 import { openWizard } from './src/ui/wizard.js';
 import { openSettingsPanel } from './src/ui/settingsPanel.js';
@@ -376,8 +378,8 @@ async function routeWorkPane(docId) {
     }
     const doc = await getDocument(docId);
     if (!doc) return;
-    // OCR-only builds have no extraction view; the OCR pane owns every status.
-    if (!OCR_ONLY && EXTRACTION_PANE_STATUSES.has(doc.status) && paneOverrides.get(docId) !== 'ocr') {
+    // With no extraction view, the OCR pane owns every status.
+    if (canExtract && EXTRACTION_PANE_STATUSES.has(doc.status) && paneOverrides.get(docId) !== 'ocr') {
         releaseOcrPane();
         await showExtractionFor(docId);
     } else {
@@ -405,7 +407,7 @@ function wireBus() {
             if (ev.status === 'queued') enqueueDocument(ev.docId);
             // In OCR-only builds 'ocr-confirmed' is terminal - never hand off
             // to the extraction queue (there is no LLM to call).
-            else if (ev.status === 'ocr-confirmed' && !OCR_ONLY) enqueueExtraction(ev.docId);
+            else if (ev.status === 'ocr-confirmed' && canExtract) enqueueExtraction(ev.docId);
         }
 
         // "View text" / "View extracted fields" pane toggle.
@@ -482,23 +484,35 @@ async function mountWorkspace() {
     // One boot-time pass: recover *-running docs stranded by a closed session,
     // then enqueue whatever is actionable. After this, routing is event-driven.
     await recoverStuckDocuments();
-    await primeQueueFromDb();
-    if (!OCR_ONLY) await primeExtractionFromDb();
+    // Each queue is primed only where its half of the pipeline runs. Without
+    // the guards a mode switch would restart work the new mode cannot finish -
+    // documents left mid-OCR would be re-queued on a machine with no OCR stage.
+    if (canRead) await primeQueueFromDb();
+    if (canExtract) await primeExtractionFromDb();
 
     // Do the initial route once everything is wired.
     await routeWorkPane(selection.getSelected());
 }
 
 async function init() {
+    // Pipeline mode first, before anything mounts: every module below reads it
+    // while loading, so there is no coherent state to render without it. Only
+    // reached on a first run where the build ships no default; the picker
+    // resolves by reloading, so nothing after this line runs.
+    if (getPipelineMode() === null) {
+        await openModePicker();
+        return;
+    }
+
     ui('app');
     initTooltip();
     bindGearIcon();
     await mountWorkspace();
 
     // The wizard exists solely to configure the extraction LLM and its schema,
-    // so OCR-only builds skip it - there is nothing to set up, and its blocking
-    // overlay would make the app unusable with no reachable LLM.
-    if (OCR_ONLY) return;
+    // so modes without extraction skip it - there is nothing to set up, and its
+    // blocking overlay would make the app unusable with no reachable LLM.
+    if (!canExtract) return;
 
     const status = await readSetupStatus();
     const setupComplete = status.schemaOk && status.credsOk && status.modelOk;

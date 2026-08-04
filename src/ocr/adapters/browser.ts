@@ -13,11 +13,48 @@ import { modelUrl, ORT_WASM_DIR } from '../runtime/assets.ts';
 import { cachedModelBytes, isRemote } from '../runtime/model-cache.ts';
 
 // onnxruntime-web WASM runtime files are vendored same-origin (public/ort/).
-// Quick Read runs primarily on WebGPU; the WASM fallback stays single-threaded
-// for maximum compatibility (threading is a later optimization).
-ort.env.wasm.numThreads = 1;
 ort.env.wasm.wasmPaths = ORT_WASM_DIR;
 ort.env.webgpu.powerPreference = 'high-performance';
+
+/** Upper bound on WASM threads. Past a handful of threads ORT is limited by
+ *  memory bandwidth rather than cores, and the remaining CPUs are better left
+ *  to the browser's compositor and (in the air-gapped deployment) the Presidio
+ *  container. Override per-session with ?ortThreads=N if a host disagrees. */
+const MAX_WASM_THREADS = 8;
+
+/**
+ * How many threads the WASM execution provider may use.
+ *
+ * This matters most where there is no GPU — an air-gapped VM, typically — as
+ * Quick Read then falls back from WebGPU to WASM and this becomes the only
+ * lever on OCR speed. Threading needs SharedArrayBuffer, hence a
+ * cross-origin-isolated page (COOP/COEP; see docker/nginx.conf and
+ * vite.config.js). Without isolation the threaded runtime cannot start at all,
+ * so fall back to one thread rather than failing.
+ *
+ * `n` comes from the ?ortThreads=N escape hatch, plumbed in from the page URL
+ * because a Web Worker can read neither the page's query string nor
+ * localStorage. It exists because ORT's threaded runtime spawns nested workers
+ * from inside quick.worker.ts, and a nested Emscripten pthread pool is exactly
+ * what deadlocked wllama here before (run-g-live.ts). If that ever happens to
+ * ORT too, ?ortThreads=1 restores the old single-threaded behaviour without a
+ * rebuild - which on an air-gapped host means without a multi-GB transfer.
+ */
+export function wasmThreadCount(n?: number): number {
+  if (!globalThis.crossOriginIsolated) return 1;
+  if (Number.isFinite(n) && (n as number) >= 1) return Math.floor(n as number);
+  const cores = navigator.hardwareConcurrency || 4;
+  return Math.max(1, Math.min(MAX_WASM_THREADS, cores));
+}
+
+/** Set the WASM thread count. Must run before the first session is created;
+ *  ORT reads this when it brings the WASM backend up. */
+export function configureWasmThreads(n?: number): void {
+  ort.env.wasm.numThreads = wasmThreadCount(n);
+}
+
+// Safe default for any importer that never calls configureWasmThreads().
+configureWasmThreads();
 
 export interface BrowserContextOpts {
   /** Default EP for every session created on this context (per-call opts.ep wins). */

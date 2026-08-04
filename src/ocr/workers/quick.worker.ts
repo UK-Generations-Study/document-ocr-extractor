@@ -8,6 +8,7 @@
  * can't race a run into a double model-load, and pages process sequentially.
  */
 import { log, setDebug } from '../runtime/logger.ts';
+import { configureWasmThreads, wasmThreadCount } from '../adapters/browser.ts';
 import { ensureE, runE, reocrRegion, eEpNote, type AppEp } from '../runtime/run-e.ts';
 import { reportError } from '../runtime/errors.ts';
 import type { DocModel } from '../structure/blocks.ts';
@@ -33,6 +34,10 @@ async function handle(msg: ToQuickWorker): Promise<void> {
       case 'init':
         setDebug(msg.debug);
         onnxEp = msg.onnxEp;
+        // Before any session exists - ORT reads the thread count when it
+        // brings the WASM backend up, and never again.
+        configureWasmThreads(msg.numThreads);
+        log.debug('[quick] wasm threads =', wasmThreadCount(msg.numThreads));
         break;
 
       case 'warm':

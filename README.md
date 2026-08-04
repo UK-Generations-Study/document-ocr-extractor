@@ -226,10 +226,12 @@ Both are fully self-contained: **neither needs network access at runtime**, and
 compose puts them on an `internal` network with no route out, so they cannot
 reach anything even on a host that does have one.
 
-It is an OCR appliance: ingest, OCR, de-identify, review and export, with **no
-LLM field extraction** (nothing to reach on an isolated network) — the setup
-wizard is skipped and Export emits the reviewed OCR text instead of extracted
-fields.
+The image **starts in Read mode** (see [Pipeline modes](#pipeline-modes)): ingest,
+OCR, de-identify, review and export, with no LLM field extraction — nothing to
+reach on an isolated network — so the setup wizard is skipped and Export emits
+the reviewed OCR text instead of extracted fields. That is a *default*, not a
+lock: an operator can switch modes in **Settings → Mode** if this image is ever
+deployed somewhere an LLM is reachable. No LLM weights are bundled either way.
 
 OCR still happens in the operator's **browser**; the app container is a static
 file server plus the `/presidio` proxy. The host therefore needs a
@@ -239,13 +241,24 @@ that runs server-side, in the analyzer container.
 ### Build (on a networked machine)
 
 ```powershell
-scripts/build-airgap.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-airgap.ps1
 ```
 
 That builds both images for `linux/amd64` and saves them into one
 `airgap-bundle.tar`. Add `-QuickReadOnly` to omit the Deep Read VLM, or
 `-OutFile` to write it elsewhere. Expect a long first run: it downloads
 ~1.64 GB of OCR weights, the clinical model, and CPU torch.
+
+(The `-ExecutionPolicy Bypass` is because Windows blocks local scripts by
+default. It applies to that one process and changes nothing on the machine.)
+
+Or run the same three steps by hand, no script involved:
+
+```powershell
+docker build --platform linux/amd64 --build-arg "FETCH_DEEP=--deep" -t document-ocr-extractor:latest .
+docker build --platform linux/amd64 -t document-ocr-extractor-presidio:latest docker/presidio
+docker save -o airgap-bundle.tar document-ocr-extractor:latest document-ocr-extractor-presidio:latest
+```
 
 ### Run (on the air-gapped machine)
 
@@ -265,6 +278,16 @@ reachable and actually detecting.
 - **Give the analyzer a moment.** Measured at ~5 seconds from `compose up` to
   a working `/analyze`. Requests before then get a 502 and de-identification
   fails closed, so don't load documents the instant the containers start.
+- **On a VM with no GPU, OCR runs on CPU threads.** Quick Read asks for WebGPU
+  and falls back to the WASM execution provider when no adapter exists — the
+  normal case on an air-gapped VM. That fallback used to be pinned to a single
+  thread, which showed up as one saturated core and very slow OCR. It now uses
+  `min(hardwareConcurrency, 8)` threads whenever the page is cross-origin
+  isolated (which the Docker image guarantees), and one thread otherwise.
+  Append **`?ortThreads=N`** to the URL to force a specific count —
+  `http://localhost:7777/?ortThreads=1` restores the old single-threaded
+  behaviour without a rebuild, which is the escape hatch to reach for if the
+  threaded runtime ever misbehaves on a particular host.
 - **Use `localhost`.** The OCR engines need `SharedArrayBuffer`, which browsers
   only expose on a cross-origin-isolated *and* secure page. `http://localhost`
   counts as secure; reaching the container over plain HTTP from another machine
@@ -285,11 +308,93 @@ To vendor the weights outside Docker (e.g. for an offline `npm run preview`):
 
 ```bash
 npm run fetch-models -- --deep        # into public/models/
-VITE_OFFLINE_MODELS=true VITE_OCR_ONLY=true npm run build
+VITE_OFFLINE_MODELS=true VITE_DEFAULT_PIPELINE_MODE=read npm run build
 ```
 
-Both flags are off by default, so an ordinary `npm run build` still produces
-the normal online app with LLM extraction (see `src/core/flags.js`).
+Both are unset by default, so an ordinary `npm run build` produces the normal
+online app and asks the operator which mode to run on first launch (see
+`src/core/flags.js` and `src/core/mode.js`).
+
+## Pipeline modes
+
+The tool has two halves — **reading** (OCR + de-identification) and
+**extracting** (LLM fields) — and they need not run on the same machine. On
+first launch the app asks which this one does; the answer is remembered and can
+be changed in **Settings → Mode**.
+
+| Mode | Does | For |
+| --- | --- | --- |
+| **Read** | OCR, de-identify, review text, export text or a handoff | An air-gapped or isolated machine |
+| **Extract** | Import a handoff, extract fields with an LLM, export fields | A machine that can reach an LLM but holds no scans |
+| **Read + Extract** | The complete pipeline on one machine | A single machine that does everything |
+
+In Read mode there is no setup wizard, no Fields tab, and no LLM call. In
+Extract mode there is no file ingest at all — the only way in is **Import text**,
+and documents arrive already reviewed. The handoff export appears in Read mode,
+where the exportable documents are text-confirmed ones; a Read + Extract machine
+extracts locally instead, so it does not offer one.
+
+Changing the mode **reloads the page**. The value is read while modules are
+still loading — `STATUS_META` is rewritten and the sidebar's filter chips are
+computed as module constants — so it cannot be swapped live. Documents already
+loaded are kept untouched across the switch; they simply stop advancing if the
+new mode has no stage for them, and resume if you switch back.
+
+A build can ship a default with `VITE_DEFAULT_PIPELINE_MODE`, which suppresses
+the first-run question. The Docker image sets `read` for exactly this reason.
+
+## Split workflow: OCR on the air-gapped machine, extraction elsewhere
+
+The two halves of the pipeline can run on different machines. OCR and
+de-identification happen on the isolated host; field extraction needs an LLM,
+which that host cannot reach. A **handoff file** carries the de-identified text
+across.
+
+This works because extraction only ever sees text — it builds a plain string
+from the OCR pages and drops it into a prompt (`src/extraction/prompts.js`).
+Page images are never sent to the LLM, so their absence costs extraction
+nothing.
+
+**On the air-gapped machine** (Read mode), confirm the text as usual, then
+**Export → Download handoff (JSON)**. You get one file:
+
+```json
+{
+  "format": "doe-ocr-handoff",
+  "formatVersion": 1,
+  "documents": [
+    {
+      "fileName": "12345.1.tif",
+      "identifiers": { "TCode": "T0001", "CB_DOCID": "12345", "yearmonth": "201207" },
+      "deidentified": true,
+      "pages": [ { "index": 1, "text": "# Histopathology Report\n\n..." } ]
+    }
+  ]
+}
+```
+
+Pages stay separate here, unlike the flat `ocr-text` export, whose
+`--- Page N ---` separators are omitted entirely for single-page documents and
+so cannot be parsed back reliably. Both exports remain available; this one is
+for the machine round-trip.
+
+**On the LLM-connected machine** (any normal build), **Import text** and pick
+the file. Documents arrive at `ocr-confirmed` — the text was already reviewed —
+and go straight into the extraction queue. Results join back to the originals on
+`TCode` / `CB_DOCID`.
+
+Imported reports have **no page images**, by design: de-identification redacts
+text only, so the original scans still contain PHI and stay on the air-gapped
+host. The viewer pane shows the de-identified text in their place, so extracted
+fields can still be checked against their source.
+
+`deidentified` means *every page carries a de-identification record* — not
+*something was redacted*. A page with no PHI and a page that was never analyzed
+both produce zero redactions, and only the record distinguishes them. It is
+recorded, not enforced: a document that skipped de-identification is exported
+with the flag `false` and imported as-is, so **a handoff file can contain
+identifiable text** and should be handled accordingly in transit and at rest.
+Export and import both say so in a notification when it happens.
 
 ## Deployment
 

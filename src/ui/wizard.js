@@ -13,6 +13,7 @@
  * reopen).
  */
 import { API_PROVIDERS } from '../core/constants.js';
+import { OFFLINE_MODELS } from '../core/flags.js';
 
 // Bundled URLs point at public/schemas/{bbd,brca}/config.json which
 // scripts/prepare-build.mjs stages on every build. The BASE_URL prefix is
@@ -237,7 +238,9 @@ function renderCredsStep(body, footer, status) {
     body.innerHTML = `
 <h3 class="text-base font-semibold text-gray-900">Choose an LLM</h3>
 <p class="text-sm text-gray-600 mt-1">
-    Extraction runs against a large-language model. Pick a hosted API (needs a key) or the in-browser option, which runs a small model on this device with no data leaving the machine.
+    Extraction runs against a large-language model.${OFFLINE_MODELS
+        ? ' Point this at an endpoint reachable from this machine.'
+        : ' Pick a hosted API (needs a key) or the in-browser option, which runs a small model on this device with no data leaving the machine.'}
 </p>
 <div class="mt-4 border-b border-gray-200">
     <nav class="-mb-px flex gap-4">
@@ -245,8 +248,13 @@ function renderCredsStep(body, footer, status) {
                 class="creds-tab whitespace-nowrap border-b-2 py-2 px-1 text-sm font-medium">OpenAI / Compatible</button>
         <button type="button" data-provider="${API_PROVIDERS.GEMINI}"
                 class="creds-tab whitespace-nowrap border-b-2 py-2 px-1 text-sm font-medium">Google Gemini</button>
+        ${/* WebLLM streams its weights from a CDN on first use, so an offline
+              build (the air-gapped image) can only fail - and it fails late,
+              after the user picked it and waited on a multi-GB download.
+              Offering it there is a trap, so it is dropped entirely. */
+          OFFLINE_MODELS ? '' : `
         <button type="button" data-provider="${API_PROVIDERS.WEBLLM}"
-                class="creds-tab whitespace-nowrap border-b-2 py-2 px-1 text-sm font-medium">In-browser (WebLLM)</button>
+                class="creds-tab whitespace-nowrap border-b-2 py-2 px-1 text-sm font-medium">In-browser (WebLLM)</button>`}
     </nav>
 </div>
 <div id="creds-panel-${API_PROVIDERS.OPENAI}" class="creds-panel mt-4 space-y-3">
@@ -268,6 +276,7 @@ function renderCredsStep(body, footer, status) {
                class="mt-1 block w-full rounded-md border border-gray-300 px-3 py-1.5 text-sm focus:border-green-600 focus:outline-none focus:ring-1 focus:ring-green-600"/>
     </div>
 </div>
+${OFFLINE_MODELS ? '' : `
 <div id="creds-panel-${API_PROVIDERS.WEBLLM}" class="creds-panel mt-4 space-y-3 hidden">
     <div class="rounded-md border border-purple-200 bg-purple-50 p-3 text-xs text-purple-900 space-y-1">
         <p><strong>No API key needed.</strong> The model runs entirely in your browser via WebGPU.</p>
@@ -282,7 +291,7 @@ function renderCredsStep(body, footer, status) {
             Total prompt tokens the model accepts. Default 8192. Extraction prompts run ~4-6k tokens for BBD; raise if your reports are longer or you're on multi-schema BrCa. Larger = more GPU memory.
         </p>
     </div>
-</div>
+</div>`}
 <div id="creds-status" class="mt-3 text-sm hidden"></div>
 `;
 

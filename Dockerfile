@@ -49,12 +49,16 @@ COPY . .
 
 # VITE_OFFLINE_MODELS: resolve every model weight same-origin from
 #   public/models/ (vendored above) instead of the HuggingFace CDN.
-# VITE_OCR_ONLY: no LLM extraction stage - OCR, review and export only, and
-#   the setup wizard (which exists only to configure an LLM) is skipped.
+# VITE_DEFAULT_PIPELINE_MODE: which halves of the pipeline the app starts in
+#   when the operator has not chosen (src/core/mode.js). 'read' means OCR +
+#   de-identification with no LLM - what an isolated host can actually do, and
+#   what this image did unconditionally when the mode was a build-time flag.
+#   It is only a DEFAULT: the operator can switch to an extraction mode in
+#   Settings if this image is ever deployed somewhere with an LLM in reach.
 # `npm run build` runs prepare-build first, staging the ONNX Runtime WASM, the
 # patched layout graph, the wllama runtime and the bundled schemas.
 ENV VITE_OFFLINE_MODELS=true \
-    VITE_OCR_ONLY=true
+    VITE_DEFAULT_PIPELINE_MODE=read
 RUN npm run build
 
 # ----------------------------------------------------------------- run stage

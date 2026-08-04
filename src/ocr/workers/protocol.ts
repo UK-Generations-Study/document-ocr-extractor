@@ -29,7 +29,9 @@ export interface PageResult {
 
 // main -> Quick Read worker
 export type ToQuickWorker =
-  | { type: 'init'; debug: boolean; onnxEp: AppEp }
+  // numThreads: WASM execution-provider threads, from the ?ortThreads=N
+  // escape hatch. Undefined means "decide from cores + isolation".
+  | { type: 'init'; debug: boolean; onnxEp: AppEp; numThreads?: number }
   | { type: 'warm' }
   | { type: 'run'; jobId: number; tag: string; imageUrl: string }
   /** On-demand OCR of a user-drawn region (Phase 4). `imageUrl` is a crop of the

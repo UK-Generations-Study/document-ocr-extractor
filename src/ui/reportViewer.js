@@ -20,9 +20,12 @@
  * The sticky header hosts the scroll-link toggle (sync page images with the
  * OCR text pane, or scroll independently); state lives in syncScroll.js.
  */
+import { micromark } from 'micromark';
+import { gfm, gfmHtml } from 'micromark-extension-gfm';
 import { getBlob, getDocument, getOcrPagesByDoc } from '../db.js';
 import { onAppEvent } from '../core/bus.js';
 import { attentionRegions } from '../ocr/confidence.js';
+import { pageOutputText } from '../deid/deidentify.js';
 import { isSyncEnabled, setSyncEnabled, onSyncToggle } from './syncScroll.js';
 
 const MOUNT_ID = 'report-viewer';
@@ -77,9 +80,14 @@ async function renderFor(docId, { force } = {}) {
     if (!doc) { renderEmpty(mount); return; }
 
     // Fetch every page blob (and any OCR results, for overlays) in parallel.
+    // Documents imported from an air-gap handoff have no page images at all -
+    // de-identification redacts text only, so the originals never leave the
+    // isolated machine. For those, this pane shows the de-identified text and
+    // there is nothing to fetch.
     const pageEntries = doc.pages || [];
+    const textOnly = doc.textOnly === true;
     const [blobs, ocrPages] = await Promise.all([
-        Promise.all(pageEntries.map((p) => getBlob(p.blobKey))),
+        textOnly ? Promise.resolve([]) : Promise.all(pageEntries.map((p) => getBlob(p.blobKey))),
         getOcrPagesByDoc(docId),
     ]);
     if (docId !== currentDocId) return;
@@ -95,7 +103,8 @@ async function renderFor(docId, { force } = {}) {
 <div class="max-w-3xl mx-auto space-y-4">
     <div class="sticky top-0 z-10 -mx-4 px-4 h-16 bg-white/90 backdrop-blur border-b border-gray-200 flex items-center justify-between gap-2">
         <span class="text-xs text-gray-500 truncate">
-            ${escapeHtml(title)} · ${pageEntries.length} page${pageEntries.length === 1 ? '' : 's'}
+            ${escapeHtml(title)} · ${pageEntries.length} page${pageEntries.length === 1 ? '' : 's'}${
+                textOnly ? ' · de-identified text (no page images)' : ''}
         </span>
         <button id="rv-sync-toggle" type="button"
                 title="When linked, the OCR text pane follows this pane page-by-page (and vice versa)."
@@ -106,13 +115,19 @@ async function renderFor(docId, { force } = {}) {
 
     const pagesRoot = mount.querySelector('#rv-pages');
     for (let i = 0; i < pageEntries.length; i++) {
+        const page = pageEntries[i];
+        const ocr = ocrByKey.get(page.blobKey);
+
+        if (textOnly) {
+            pagesRoot.appendChild(textPageCard(page, ocr, i));
+            continue;
+        }
+
         const blob = blobs[i];
         if (!blob) continue; // shouldn't happen, but be defensive
         const url = URL.createObjectURL(blob);
         liveObjectUrls.push(url);
 
-        const page = pageEntries[i];
-        const ocr = ocrByKey.get(page.blobKey);
         const wrap = document.createElement('div');
         wrap.className = 'bg-gray-50 border border-gray-200 rounded shadow-sm';
         wrap.dataset.pageIndex = String(i);
@@ -146,6 +161,40 @@ const OVERLAY_STYLES = {
     'coverage-gap': 'bg-sky-300/25 hover:bg-sky-300/40',
     'disagreement': 'bg-red-300/25 hover:bg-red-300/40',
 };
+
+/**
+ * One page of a text-only document (imported from an air-gap handoff): the
+ * de-identified text where the page image would otherwise be.
+ *
+ * Deliberately built to the same card geometry as the image path and as
+ * ocrView.js - h-8 header, body carrying the page's aspect ratio - so page N
+ * still lines up across the two panes and the scroll link stays exact. Imported
+ * pages get nominal dimensions at import time precisely so this holds; see
+ * handoffImport.js.
+ *
+ * The body scrolls: unlike an image, text has no intrinsic height and a long
+ * page would otherwise stretch the card and break the alignment.
+ */
+function textPageCard(page, ocr, i) {
+    // Same gate as every other consumer: the redacted copy when
+    // de-identification ran. Imported pages carry no deid record, so this
+    // returns exactly the text that crossed the gap.
+    const text = pageOutputText(ocr);
+    const html = text
+        ? micromark(text, { extensions: [gfm()], htmlExtensions: [gfmHtml()] })
+        : `<p class="text-gray-400 italic">This page has no text.</p>`;
+    const wrap = document.createElement('div');
+    wrap.className = 'bg-white border border-gray-200 rounded shadow-sm';
+    wrap.dataset.pageIndex = String(i);
+    wrap.innerHTML = `
+<div class="h-8 flex items-center justify-between px-3 text-xs text-gray-500 border-b border-gray-200">
+    <span>Page ${i + 1}</span>
+    <span>text only</span>
+</div>
+<div class="overflow-y-auto rounded-b prose prose-sm max-w-none p-4 text-sm leading-relaxed"
+     style="aspect-ratio: ${page.width} / ${page.height}; --tw-prose-headings: #111827;">${html}</div>`;
+    return wrap;
+}
 
 /** Boxes over the page image marking every OCR region needing attention. */
 function overlaysHtml(page, ocr) {

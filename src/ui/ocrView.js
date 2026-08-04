@@ -325,7 +325,9 @@ function headerHtml(doc, ocrByKey) {
     class="rounded-md bg-green-800 px-3 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-green-700">
     Confirm text
 </button>
-${deepButtonHtml(anyDeep, deep)}
+${/* Deep Read re-reads the page IMAGE. A document imported from an air-gap
+      handoff has none, so the run would only fail with "page blob missing". */
+  doc.textOnly ? '' : deepButtonHtml(anyDeep, deep)}
 ${resetButtonHtml(ocrByKey)}`;
             break;
         case 'ocr-failed':

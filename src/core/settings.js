@@ -30,6 +30,15 @@ const DEFAULTS = {
     syncScroll: true,
     lowConfThreshold: 0.6,
 
+    /**
+     * Which halves of the pipeline this machine runs - see src/core/mode.js.
+     *
+     * The authoritative copy, but NOT the one read at boot: it is needed before
+     * IndexedDB could answer, so mode.js keeps a synchronous localStorage
+     * mirror and both are written together. Null until the user chooses.
+     */
+    pipelineMode: null,
+
     // De-identification (Presidio). ON by default: this app is meant to handle
     // identifiable clinical documents, so removing identifiers should be the
     // behaviour you get without having to know to ask for it.

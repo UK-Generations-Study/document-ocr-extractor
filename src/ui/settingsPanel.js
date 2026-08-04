@@ -9,7 +9,8 @@
  * longer means re-walking schema + credentials.
  */
 import { getSettings, saveSettings, REVIEW_MODES } from '../core/settings.js';
-import { OCR_ONLY } from '../core/flags.js';
+import { canExtract } from '../core/flags.js';
+import { getPipelineMode, setPipelineMode, MODE_COPY as PIPELINE_COPY, PIPELINE_MODES } from '../core/mode.js';
 import { DEFAULT_ENTITIES, checkHealth, supportedEntities } from '../deid/presidio.js';
 import { allDocuments, getOcrPagesByDoc, putDocument } from '../db.js';
 import { emitAppEvent } from '../core/bus.js';
@@ -19,12 +20,13 @@ import { showToast } from './toast.js';
 
 const MOUNT_ID = 'settings-mount';
 
-/** Panels, in tab order. 'extraction' is dropped in OCR-only builds, where
- *  there is no LLM to configure. */
+/** Panels, in tab order. 'extraction' is dropped where extraction is off,
+ *  since there is no LLM to configure. */
 const TABS = [
     { id: 'extraction', label: 'Extraction' },
     { id: 'processing', label: 'Processing' },
     { id: 'privacy', label: 'Privacy' },
+    { id: 'mode', label: 'Mode' },
     { id: 'view', label: 'View' },
 ];
 
@@ -37,14 +39,14 @@ const MODE_COPY = [
     {
         id: REVIEW_MODES.FLAGGED,
         title: 'Review flagged text only',
-        desc: OCR_ONLY
+        desc: !canExtract
             ? 'Reports whose OCR looks clean are confirmed automatically. Only pages with low-confidence lines stop for review.'
             : 'Reports whose OCR looks clean skip the text check and go straight to extraction. Only pages with low-confidence lines stop for review.',
     },
     {
         id: REVIEW_MODES.AUTO,
         title: 'Fully automatic',
-        desc: OCR_ONLY
+        desc: !canExtract
             ? 'No text check at all - every report is confirmed as soon as OCR finishes. Best for large, clean batches.'
             : 'No text check at all - every report flows from OCR into extraction. Best for large, clean batches.',
     },
@@ -77,7 +79,7 @@ export async function openSettingsPanel(deps) {
         </div>
         <div class="px-5 border-b border-gray-100">
             <nav class="-mb-px flex gap-4" role="tablist">
-                ${TABS.filter((t) => !(t.id === 'extraction' && OCR_ONLY)).map((t, i) => `
+                ${TABS.filter((t) => !(t.id === 'extraction' && !canExtract)).map((t, i) => `
                 <button type="button" role="tab" data-tab="${t.id}"
                         class="sp-tab whitespace-nowrap border-b-2 py-2 px-1 text-sm font-medium ${
                             i === 0 ? 'border-green-600 text-green-700' : 'border-transparent text-gray-500 hover:text-gray-700'}">
@@ -86,8 +88,8 @@ export async function openSettingsPanel(deps) {
             </nav>
         </div>
         <div class="p-5 overflow-y-auto min-h-[20rem]">
-            <!-- Extraction: schema / provider / model (no LLM in OCR-only builds) -->
-            ${OCR_ONLY ? '' : `
+            <!-- Extraction: schema / provider / model (absent when extraction is off) -->
+            ${!canExtract ? '' : `
             <div class="sp-panel" data-panel="extraction">
             <section>
                 <h3 class="text-xs font-semibold uppercase tracking-wide text-gray-500">Configuration</h3>
@@ -104,7 +106,7 @@ export async function openSettingsPanel(deps) {
             <section>
                 <h3 class="text-xs font-semibold uppercase tracking-wide text-gray-500">Processing</h3>
                 <p class="mt-1 text-xs text-gray-500">
-                    How much of the batch runs without stopping for you.${OCR_ONLY ? '' : `
+                    How much of the batch runs without stopping for you.${!canExtract ? '' : `
                     Extracted fields always wait for your confirmation - singly, or via
                     "Confirm all" in the sidebar.`}
                 </p>
@@ -201,6 +203,32 @@ export async function openSettingsPanel(deps) {
 
             </div>
 
+            <!-- Pipeline mode: which halves of the pipeline this machine runs.
+                 Applied on reload, because the value is read while modules are
+                 still loading (see src/core/mode.js). -->
+            <div class="sp-panel hidden" data-panel="mode">
+            <section>
+                <h3 class="text-xs font-semibold uppercase tracking-wide text-gray-500">Pipeline mode</h3>
+                <p class="mt-1 text-xs text-gray-500">
+                    Which halves of the pipeline this machine runs. Reading is OCR and
+                    de-identification; extracting pulls structured fields out with an LLM.
+                    Changing this reloads the app. Reports already loaded are kept.
+                </p>
+                <div class="mt-2 space-y-2">
+                    ${Object.values(PIPELINE_MODES).map((id) => `
+                    <label class="flex items-start gap-3 rounded-md border p-3 cursor-pointer hover:border-green-500 has-[:checked]:border-green-600 has-[:checked]:bg-green-50 border-gray-300">
+                        <input type="radio" name="sp-pipeline-mode" value="${id}" ${getPipelineMode() === id ? 'checked' : ''}
+                               class="mt-0.5 h-4 w-4 text-green-600 focus:ring-green-500 border-gray-300"/>
+                        <span>
+                            <span class="block text-sm font-medium text-gray-900">${PIPELINE_COPY[id].title}</span>
+                            <span class="block text-xs text-gray-600 mt-0.5">${PIPELINE_COPY[id].desc}</span>
+                            <span class="block text-xs text-gray-400 mt-0.5">${PIPELINE_COPY[id].forWhom}</span>
+                        </span>
+                    </label>`).join('')}
+                </div>
+            </section>
+            </div>
+
             <!-- View -->
             <div class="sp-panel hidden" data-panel="view">
             <section>
@@ -260,6 +288,20 @@ export async function openSettingsPanel(deps) {
             await saveSettings({ reviewMode: radio.value });
             const mode = MODE_COPY.find((m) => m.id === radio.value);
             showToast(`Processing mode: ${mode?.title || radio.value}.`, { tone: 'success' });
+        });
+    });
+
+    // Pipeline mode. Both copies are written - settings is authoritative, the
+    // mirror in mode.js is what the next boot can read synchronously - and then
+    // the page reloads, because eight modules captured the old value at import.
+    mount.querySelectorAll('input[name="sp-pipeline-mode"]').forEach((radio) => {
+        radio.addEventListener('change', async () => {
+            const next = radio.value;
+            if (next === getPipelineMode()) return;
+            setPipelineMode(next);
+            await saveSettings({ pipelineMode: next });
+            showToast(`Switching to ${PIPELINE_COPY[next].title}…`, { tone: 'success' });
+            setTimeout(() => location.reload(), 400);
         });
     });
 

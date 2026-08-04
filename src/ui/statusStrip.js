@@ -8,7 +8,7 @@
  */
 import { allDocuments } from '../db.js';
 import { onAppEvent } from '../core/bus.js';
-import { OCR_ONLY } from '../core/flags.js';
+import { canExtract } from '../core/flags.js';
 
 const MOUNT_ID = 'status-strip';
 const REFRESH_EVENTS = new Set(['status', 'doc-start', 'doc-done', 'enqueued', 'page-done', 'doc-deleted']);
@@ -33,15 +33,15 @@ async function render() {
         return;
     }
 
-    // In OCR-only builds 'ocr-confirmed' is the finish line, not a hand-off to
-    // extraction, so it counts as done rather than still-working.
+    // Without extraction, 'ocr-confirmed' is the finish line rather than a
+    // hand-off, so it counts as done rather than still-working.
     const by = (statuses) => docs.filter((d) => statuses.includes(d.status)).length;
-    const working = by(OCR_ONLY
-        ? ['queued', 'ocr-running']
-        : ['queued', 'ocr-running', 'ocr-confirmed', 'extraction-running']);
-    const review = by(OCR_ONLY ? ['ocr-done'] : ['ocr-done', 'extraction-done']);
-    const done = by(OCR_ONLY ? ['ocr-confirmed', 'exported'] : ['confirmed', 'exported']);
-    const failed = by(OCR_ONLY ? ['ocr-failed'] : ['ocr-failed', 'extraction-failed']);
+    const working = by(canExtract
+        ? ['queued', 'ocr-running', 'ocr-confirmed', 'extraction-running']
+        : ['queued', 'ocr-running']);
+    const review = by(canExtract ? ['ocr-done', 'extraction-done'] : ['ocr-done']);
+    const done = by(canExtract ? ['confirmed', 'exported'] : ['ocr-confirmed', 'exported']);
+    const failed = by(canExtract ? ['ocr-failed', 'extraction-failed'] : ['ocr-failed']);
 
     const chips = [];
     if (working) chips.push(chip(`${working} working`, 'bg-green-800 text-green-100', true));

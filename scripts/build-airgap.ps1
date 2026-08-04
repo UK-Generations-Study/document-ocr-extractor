@@ -25,11 +25,18 @@
     Target architecture. linux/amd64 covers both Linux x86_64 hosts and
     Windows Docker Desktop.
 
-.EXAMPLE
-    scripts/build-airgap.ps1
+.NOTES
+    Windows blocks local scripts by default, so invoke it like this rather
+    than as .\scripts\build-airgap.ps1 - the bypass applies to that one
+    process and changes nothing on the machine:
+
+        powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-airgap.ps1
 
 .EXAMPLE
-    scripts/build-airgap.ps1 -QuickReadOnly -OutFile D:\transfer\doe.tar
+    powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-airgap.ps1
+
+.EXAMPLE
+    powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-airgap.ps1 -QuickReadOnly -OutFile D:\transfer\doe.tar
 #>
 [CmdletBinding()]
 param(

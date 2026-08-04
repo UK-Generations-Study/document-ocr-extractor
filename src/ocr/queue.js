@@ -45,6 +45,22 @@ function emit(event) {
     emitAppEvent({ source: 'ocr', ...event });
 }
 
+/**
+ * ?ortThreads=N from the page URL, or undefined to let the worker decide from
+ * core count and cross-origin isolation.
+ *
+ * Read here rather than in the worker because a Web Worker can see neither the
+ * page's query string nor localStorage. It is a diagnostic escape hatch, not a
+ * setting: ?ortThreads=1 restores single-threaded OCR if the threaded runtime
+ * misbehaves on a given host, without needing a rebuild - which matters on an
+ * air-gapped machine, where a rebuild means moving multiple GB again.
+ */
+function ortThreadsOverride() {
+    const raw = new URLSearchParams(location.search).get('ortThreads');
+    const n = Number(raw);
+    return raw !== null && Number.isFinite(n) && n >= 1 ? Math.floor(n) : undefined;
+}
+
 async function ensureClient() {
     if (client && ready) return client;
     if (!client) {
@@ -52,6 +68,7 @@ async function ensureClient() {
             client = new QuickClient({
                 debug: false,
                 onnxEp: 'webgpu',
+                numThreads: ortThreadsOverride(),
                 handlers: {
                     onLoadProgress: (loaded, total) => {
                         emit({ type: 'load-progress', loaded, total });

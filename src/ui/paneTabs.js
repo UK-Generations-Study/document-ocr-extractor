@@ -9,12 +9,12 @@
  */
 import { emitAppEvent } from '../core/bus.js';
 import { EXTRACTION_PANE_STATUSES } from '../core/status.js';
-import { OCR_ONLY } from '../core/flags.js';
+import { canExtract } from '../core/flags.js';
 
 export function paneTabsHtml(doc, active) {
-    // No extraction stage in OCR-only builds - the tab strip would offer a
-    // view that can never have content, so drop it entirely.
-    if (OCR_ONLY) return '';
+    // Without an extraction stage the tab strip would offer a view that can
+    // never have content, so drop it entirely.
+    if (!canExtract) return '';
     const fieldsEnabled = EXTRACTION_PANE_STATUSES.has(doc.status);
     const base = 'px-2.5 py-1 text-[11px] font-medium whitespace-nowrap';
     const on = 'bg-green-800 text-white';

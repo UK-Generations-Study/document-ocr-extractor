@@ -33,11 +33,11 @@ export class QuickClient {
   private readonly handlers: QuickClientHandlers;
   warmed = false;
 
-  constructor(opts: { debug: boolean; onnxEp: AppEp; handlers?: QuickClientHandlers }) {
+  constructor(opts: { debug: boolean; onnxEp: AppEp; numThreads?: number; handlers?: QuickClientHandlers }) {
     this.handlers = opts.handlers ?? {};
     this.worker = new Worker(new URL('./quick.worker.ts', import.meta.url), { type: 'module', name: 'quick-read' });
     this.worker.onmessage = (e: MessageEvent<FromQuickWorker>) => this.handle(e.data);
-    this.send({ type: 'init', debug: opts.debug, onnxEp: opts.onnxEp });
+    this.send({ type: 'init', debug: opts.debug, onnxEp: opts.onnxEp, numThreads: opts.numThreads });
   }
 
   /** Begin eager model warm-up. */
