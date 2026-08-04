@@ -32,66 +32,9 @@ export function createProvider(providerId, config) {
     return new ProviderClass(config);
 }
 
-/**
- * Get list of available providers
- * @returns {Array<{id: string, name: string, description: string}>}
- */
-export function getAvailableProviders() {
-    return [
-        {
-            id: API_PROVIDERS.OPENAI,
-            name: 'OpenAI Compatible',
-            description: 'OpenAI API and compatible endpoints (Azure OpenAI, vLLM, Ollama, etc.)'
-        },
-        {
-            id: API_PROVIDERS.GEMINI,
-            name: 'Google Gemini',
-            description: 'Google Gemini API'
-        },
-        {
-            id: API_PROVIDERS.WEBLLM,
-            name: 'In-browser (WebLLM)',
-            description: 'Small on-device LLM via WebGPU. No API key. Documents never leave your machine.'
-        }
-    ];
-}
-
-/**
- * Get provider display name
- * @param {string} providerId
- * @returns {string}
- */
-export function getProviderDisplayName(providerId) {
-    const providers = {
-        [API_PROVIDERS.OPENAI]: 'OpenAI',
-        [API_PROVIDERS.GEMINI]: 'Gemini',
-        [API_PROVIDERS.WEBLLM]: 'WebLLM'
-    };
-    return providers[providerId] || providerId;
-}
-
-/**
- * Detect provider from base URL
- * @param {string} baseUrl - The base URL to analyze
- * @returns {string} - The detected provider ID
- */
-export function detectProviderFromUrl(baseUrl) {
-    if (!baseUrl) return API_PROVIDERS.GEMINI; // Empty base URL = Gemini
-
-    const url = baseUrl.toLowerCase();
-    if (url.includes('generativelanguage.googleapis.com') ||
-        url.includes('gemini') ||
-        url.includes('google')) {
-        return API_PROVIDERS.GEMINI;
-    }
-    return API_PROVIDERS.OPENAI;
-}
-
-/**
- * Check if a provider ID is valid
- * @param {string} providerId
- * @returns {boolean}
- */
-export function isValidProvider(providerId) {
-    return Object.values(API_PROVIDERS).includes(providerId);
-}
+// Provider display names and the provider-from-URL guess used to live here as
+// exported helpers with no callers. Each duplicated a list that the UI already
+// keeps for itself - the wizard's provider tabs, settingsPanel's providerLabel
+// map - so they could drift out of step silently, and did. Whatever needs a
+// label or a URL guess should own it, or take it from a single shared source;
+// a second unused copy is worse than none.
