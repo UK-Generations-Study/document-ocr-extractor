@@ -4,8 +4,8 @@
  * The tool has two halves - reading (OCR + de-identification) and extracting
  * (LLM field extraction) - and they can run on different machines. An
  * air-gapped host reads; a host that can reach an LLM extracts; one machine
- * with both does everything. The handoff file carries text between them (see
- * src/results/handoff.js).
+ * with both does everything. The report-text file carries text between them (see
+ * src/results/textExport.js).
  *
  * Called "pipeline mode" throughout, because Settings already calls the
  * how-much-stops-for-review choice a "review mode" (REVIEW_MODES) and two

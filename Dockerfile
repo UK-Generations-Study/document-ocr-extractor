@@ -47,18 +47,19 @@ RUN node scripts/fetch-models.mjs ${FETCH_DEEP}
 # Now the application source.
 COPY . .
 
-# VITE_OFFLINE_MODELS: resolve every model weight same-origin from
-#   public/models/ (vendored above) instead of the HuggingFace CDN.
-# VITE_DEFAULT_PIPELINE_MODE: which halves of the pipeline the app starts in
-#   when the operator has not chosen (src/core/mode.js). 'read' means OCR +
-#   de-identification with no LLM - what an isolated host can actually do, and
-#   what this image did unconditionally when the mode was a build-time flag.
-#   It is only a DEFAULT: the operator can switch to an extraction mode in
-#   Settings if this image is ever deployed somewhere with an LLM in reach.
+# VITE_OFFLINE_MODELS: resolve every OCR model weight same-origin from
+#   public/models/ (vendored above) instead of the HuggingFace CDN. This says
+#   nothing about the LLM: no LLM weights are bundled, and the in-browser
+#   (WebLLM) option still fetches its model on first use, so it needs a host
+#   with internet. Endpoint-based providers need only a reachable base URL.
+#
+# No default pipeline mode is baked in: this image runs on reading machines,
+# extracting machines and machines doing both, so it asks on first launch
+# rather than guessing (src/core/mode.js).
+#
 # `npm run build` runs prepare-build first, staging the ONNX Runtime WASM, the
 # patched layout graph, the wllama runtime and the bundled schemas.
-ENV VITE_OFFLINE_MODELS=true \
-    VITE_DEFAULT_PIPELINE_MODE=read
+ENV VITE_OFFLINE_MODELS=true
 RUN npm run build
 
 # ----------------------------------------------------------------- run stage

@@ -16,13 +16,13 @@
 import { allDocuments, deleteDocument, getOcrPagesByDoc } from '../db.js';
 import { onAppEvent, emitAppEvent } from '../core/bus.js';
 import { STATUS_META, setDocumentStatus } from '../core/status.js';
-import { canExtract, canImportHandoff, canRead } from '../core/flags.js';
+import { canExportText, canExtract, canImportText, canRead } from '../core/flags.js';
 import { pageOutputText } from '../deid/deidentify.js';
 import { ingestFiles } from '../ingest/ingest.js';
 import { ingestFromMetadata } from '../ingest/metadataIngest.js';
-import { importHandoff } from '../ingest/handoffImport.js';
-import { combineExtractedData, combineOcrText, convertJsonToCsv } from '../results/processor.js';
-import { buildHandoff, parseHandoff } from '../results/handoff.js';
+import { importTextExport } from '../ingest/textImport.js';
+import { combineExtractedData, convertJsonToCsv } from '../results/processor.js';
+import { buildTextExport, parseTextExport } from '../results/textExport.js';
 import { isCurrentSchema } from '../deid/deidentify.js';
 import { confirmOcr, confirmExtraction, retryDoc } from './reviewFlow.js';
 import { showToast, confirmDialog, infoDialog } from './toast.js';
@@ -31,10 +31,26 @@ const MOUNT_ID = 'report-list';
 
 const ACCEPTED_EXT = '.pdf,.png,.jpg,.jpeg,.webp,.gif,.bmp,.tif,.tiff';
 
-/** Documents eligible for export: those whose reviewed output is final. */
-const EXPORTABLE = canExtract
-    ? ['confirmed', 'exported']
-    : ['ocr-confirmed', 'exported'];
+/**
+ * The two exports answer to different finish lines, so they have different
+ * eligibility.
+ *
+ * Fields: only once the extracted fields are confirmed.
+ *
+ * Text: once the TEXT is confirmed, which happens earlier and stays true for
+ * the rest of the document's life. A Read + Extract machine can therefore hand
+ * its text to another machine without having to extract locally first - which
+ * a single 'confirmed'-only rule would have forced.
+ */
+const FIELDS_EXPORTABLE = ['confirmed', 'exported'];
+const TEXT_EXPORTABLE = [
+    'ocr-confirmed', 'extraction-running', 'extraction-done',
+    'extraction-failed', 'confirmed', 'exported',
+];
+
+/** Which statuses the Export button's count refers to: whichever export is the
+ *  point of this mode. */
+const PRIMARY_EXPORTABLE = canExtract ? FIELDS_EXPORTABLE : TEXT_EXPORTABLE;
 
 /** Filter chips: id -> { label, statuses (null = all) }. Without extraction
  *  those stages don't exist, so 'ocr-confirmed' is the Done bucket. */
@@ -99,8 +115,8 @@ export async function mountReportList(deps) {
             CSV batch
         </label>
         <input id="rl-metadata-input" type="file" webkitdirectory directory multiple class="sr-only"/>`}
-        ${!canImportHandoff ? '' : `
-        <label for="rl-handoff-input" title="Load a handoff file of de-identified OCR text from an air-gapped machine. These reports have no page images and go straight to extraction."
+        ${!canImportText ? '' : `
+        <label for="rl-text-input" title="Load a report-text file of de-identified OCR text exported from another machine. These reports have no page images and go straight to extraction."
                class="cursor-pointer flex-1 inline-flex items-center justify-center gap-1.5 rounded-md border border-gray-300 bg-white px-2 py-1.5 text-xs font-medium text-gray-700 shadow-sm hover:bg-gray-50">
             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-4 h-4">
                 <path d="M10.75 2.75a.75.75 0 00-1.5 0v8.614L6.295 8.235a.75.75 0 10-1.09 1.03l4.25 4.5a.75.75 0 001.09 0l4.25-4.5a.75.75 0 00-1.09-1.03L10.75 11.364V2.75z"/>
@@ -108,7 +124,7 @@ export async function mountReportList(deps) {
             </svg>
             Import text
         </label>
-        <input id="rl-handoff-input" type="file" accept="application/json,.json" class="sr-only"/>`}
+        <input id="rl-text-input" type="file" accept="application/json,.json" class="sr-only"/>`}
         <div id="rl-export-wrap" class="relative flex-1">
             <button id="rl-export" type="button" disabled title="Download the confirmed extractions"
                     class="w-full inline-flex items-center justify-center gap-1.5 rounded-md border border-gray-300 bg-white px-2 py-1.5 text-xs font-medium text-gray-700 shadow-sm hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed">
@@ -118,15 +134,23 @@ export async function mountReportList(deps) {
                 </svg>
                 Export<span id="rl-export-count" class="text-gray-400"></span>
             </button>
-            <div id="rl-export-menu" class="hidden absolute right-0 mt-1 w-52 rounded-md border border-gray-200 bg-white shadow-lg z-20">
-                <button data-format="csv" class="rl-export-choice block w-full text-left px-3 py-2 text-xs text-gray-700 hover:bg-gray-100">Download CSV</button>
-                <button data-format="json" class="rl-export-choice block w-full text-left px-3 py-2 text-xs text-gray-700 hover:bg-gray-100">Download JSON</button>
-                ${!canExtract ? `
-                <button data-format="handoff"
-                        title="Per-page de-identified text, for importing on a machine that can reach an LLM. No page images."
-                        class="rl-export-choice block w-full text-left px-3 py-2 text-xs text-gray-700 hover:bg-gray-100 border-t border-gray-200">
-                    Download handoff (JSON)
-                </button>` : ''}
+            <!-- Field exports need extracted fields to exist; the text export
+                 needs text. Read mode therefore offers only the latter, which
+                 is the whole output of that mode. -->
+            <div id="rl-export-menu" class="hidden absolute right-0 mt-1 w-56 rounded-md border border-gray-200 bg-white shadow-lg z-20">
+                ${!canExtract ? '' : `
+                <button data-format="csv" class="rl-export-choice block w-full text-left px-3 py-2 text-xs text-gray-700 hover:bg-gray-100">
+                    Fields as CSV<span class="rl-count text-gray-400" data-count="fields"></span>
+                </button>
+                <button data-format="json" class="rl-export-choice block w-full text-left px-3 py-2 text-xs text-gray-700 hover:bg-gray-100">
+                    Fields as JSON<span class="rl-count text-gray-400" data-count="fields"></span>
+                </button>`}
+                ${!canExportText ? '' : `
+                <button data-format="text"
+                        title="Per-page de-identified report text, for importing on a machine that can reach an LLM. No page images."
+                        class="rl-export-choice block w-full text-left px-3 py-2 text-xs text-gray-700 hover:bg-gray-100 ${canExtract ? 'border-t border-gray-200' : ''}">
+                    Report text as JSON<span class="rl-count text-gray-400" data-count="text"></span>
+                </button>`}
             </div>
         </div>
     </div>
@@ -148,7 +172,7 @@ export async function mountReportList(deps) {
 </div>`;
 
     // Wire the file inputs. These exist only where there is an OCR stage to
-    // feed - in Extract mode the only way in is a handoff file.
+    // feed - in Extract mode the only way in is a report-text file.
     const input = mount.querySelector('#rl-file-input');
     input?.addEventListener('change', async () => {
         if (!input.files?.length) return;
@@ -165,12 +189,12 @@ export async function mountReportList(deps) {
         await ingestMetadataAndRefresh(files);
     });
 
-    // Handoff import exists only where there is an LLM to extract with.
-    const handoffInput = mount.querySelector('#rl-handoff-input');
-    handoffInput?.addEventListener('change', async () => {
-        const file = handoffInput.files?.[0];
-        handoffInput.value = '';
-        if (file) await importHandoffAndRefresh(file);
+    // Text import exists only where there is an LLM to extract with.
+    const textInput = mount.querySelector('#rl-text-input');
+    textInput?.addEventListener('change', async () => {
+        const file = textInput.files?.[0];
+        textInput.value = '';
+        if (file) await importReportTextAndRefresh(file);
     });
 
     // Whole sidebar is a drop-target. Prevent default on all four events so
@@ -373,60 +397,46 @@ async function runBatchAction(action) {
 
 // ---------- export ----------
 
+const eligibleFor = (statuses) => currentDocs.filter((d) => statuses.includes(d.status));
+
 function refreshExportAffordance() {
     const btn = document.getElementById('rl-export');
     const count = document.getElementById('rl-export-count');
     if (!btn || !count) return;
-    const eligible = currentDocs.filter((d) => EXPORTABLE.includes(d.status)).length;
-    btn.disabled = eligible === 0;
-    count.textContent = eligible > 0 ? ` ${eligible}` : '';
+    const fields = canExtract ? eligibleFor(FIELDS_EXPORTABLE).length : 0;
+    const text = canExportText ? eligibleFor(TEXT_EXPORTABLE).length : 0;
+    // Enabled if ANY offered export has something to write - the two have
+    // different finish lines, so one can be ready while the other is not.
+    btn.disabled = fields === 0 && text === 0;
+    const primary = eligibleFor(PRIMARY_EXPORTABLE).length;
+    count.textContent = primary > 0 ? ` ${primary}` : '';
+    // Per-row counts, since the menu offers exports over different sets.
+    document.querySelectorAll('#rl-export-menu .rl-count').forEach((el) => {
+        const n = el.dataset.count === 'text' ? text : fields;
+        el.textContent = n > 0 ? ` (${n})` : '';
+    });
 }
 
 async function handleExport(format) {
-    const eligible = currentDocs.filter((d) => EXPORTABLE.includes(d.status));
-    if (!eligible.length) return;
-    if (format === 'handoff') {
-        await exportHandoff(eligible);
+    if (format === 'text') {
+        const eligible = eligibleFor(TEXT_EXPORTABLE);
+        if (eligible.length) await exportReportText(eligible);
         return;
     }
-    let rows;
-    if (!canExtract) {
-        // No extracted fields exist; export the reviewed OCR text instead,
-        // reading each document's pages in stored order.
-        const textByDoc = new Map();
-        for (const d of eligible) {
-            const pages = await getOcrPagesByDoc(d.id);
-            const byKey = new Map(pages.map((p) => [p.pageBlobKey, p]));
-            const text = (d.pages || [])
-                .map((p, i) => {
-                    // Redacted copy when de-identification ran, else raw OCR.
-                    const md = pageOutputText(byKey.get(p.blobKey));
-                    return (d.pages.length > 1 ? `--- Page ${i + 1} ---\n` : '') + md;
-                })
-                .join('\n\n')
-                .trim();
-            textByDoc.set(d.id, text);
-        }
-        rows = combineOcrText(eligible, textByDoc);
-    } else {
-        rows = combineExtractedData(eligible);
-    }
+    const eligible = eligibleFor(FIELDS_EXPORTABLE);
+    if (!eligible.length) return;
+
+    const rows = combineExtractedData(eligible);
     const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-    const name = canExtract ? 'extractions' : 'ocr-text';
     if (format === 'csv') {
-        const csv = convertJsonToCsv(rows);
-        triggerDownload(`${name}-${stamp}.csv`, 'text/csv', csv);
+        triggerDownload(`extractions-${stamp}.csv`, 'text/csv', convertJsonToCsv(rows));
     } else {
-        const json = JSON.stringify(rows, null, 2);
-        triggerDownload(`${name}-${stamp}.json`, 'application/json', json);
+        triggerDownload(`extractions-${stamp}.json`, 'application/json', JSON.stringify(rows, null, 2));
     }
     // Mark each exported doc so the badge reflects the terminal state.
     // Via setDocumentStatus so the bus announces it (status strip, etc.).
-    // The pre-export terminal status differs by build: 'confirmed' normally,
-    // 'ocr-confirmed' when there is no extraction stage.
-    const preExport = canExtract ? 'confirmed' : 'ocr-confirmed';
     for (const d of eligible) {
-        if (d.status === preExport) {
+        if (d.status === 'confirmed') {
             await setDocumentStatus(d.id, 'exported', { exportedAt: Date.now() });
         }
     }
@@ -435,11 +445,10 @@ async function handleExport(format) {
 }
 
 /**
- * Write the air-gap handoff file: per-page de-identified text for a machine
- * that can reach an LLM. See src/results/handoff.js for the format and why it
- * is not the same artifact as the flat ocr-text export.
+ * Write the report-text file: per-page de-identified text for a machine that
+ * can reach an LLM. See src/results/textExport.js for the format.
  */
-async function exportHandoff(eligible) {
+async function exportReportText(eligible) {
     const entries = [];
     for (const d of eligible) {
         const ocrPages = await getOcrPagesByDoc(d.id);
@@ -460,22 +469,27 @@ async function exportHandoff(eligible) {
 
     const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
     triggerDownload(
-        `ocr-handoff-${stamp}.json`,
+        `report-text-${stamp}.json`,
         'application/json',
-        JSON.stringify(buildHandoff(entries), null, 2),
+        JSON.stringify(buildTextExport(entries), null, 2),
     );
 
-    for (const d of eligible) {
-        if (d.status === 'ocr-confirmed') {
-            await setDocumentStatus(d.id, 'exported', { exportedAt: Date.now() });
+    // Only in Read mode does writing the text finish the document. Where
+    // extraction follows, the text export is a way-point and the document
+    // still has fields to produce, so its status is left alone.
+    if (!canExtract) {
+        for (const d of eligible) {
+            if (d.status === 'ocr-confirmed') {
+                await setDocumentStatus(d.id, 'exported', { exportedAt: Date.now() });
+            }
         }
     }
 
     // Un-redacted documents are exported with the flag false rather than
-    // blocked, so say so plainly - the file then carries PHI across the gap.
+    // blocked, so say so plainly - the file then carries PHI.
     const bare = entries.filter((e) => !e.deidentified).length;
     showToast(
-        `Handoff written: ${eligible.length} report${eligible.length === 1 ? '' : 's'}.`
+        `Report text written: ${eligible.length} report${eligible.length === 1 ? '' : 's'}.`
         + (bare ? ` ${bare} not de-identified - this file contains identifiable text.` : ''),
         bare ? { tone: 'info', duration: 8000 } : { tone: 'success' },
     );
@@ -498,20 +512,20 @@ function triggerDownload(filename, mime, content) {
 // ---------- ingest ----------
 
 /**
- * Load a handoff file of de-identified OCR text (the receiving half of the
- * air-gapped split workflow). The documents arrive already reviewed, so they
- * land at 'ocr-confirmed' and the status routing hands them to extraction.
+ * Load a report-text file of de-identified OCR text (the receiving half of the
+ * split workflow). The documents arrive already reviewed, so they land at
+ * 'ocr-confirmed' and the status routing hands them to extraction.
  */
-async function importHandoffAndRefresh(file) {
+async function importReportTextAndRefresh(file) {
     const progress = document.getElementById('rl-progress');
     const bar = document.getElementById('rl-progress-bar');
     const label = document.getElementById('rl-progress-label');
     if (progress) progress.style.display = 'flex';
     try {
-        // parseHandoff throws with a message worth showing: a file carried by
-        // hand across an air gap must not fail silently.
-        const parsed = parseHandoff(await file.text());
-        const { docIds, pageCount, notDeidentified } = await importHandoff(parsed, (done, total, name) => {
+        // parseTextExport throws with a message worth showing: a file carried
+        // by hand between machines must not fail silently.
+        const parsed = parseTextExport(await file.text());
+        const { docIds, pageCount, notDeidentified } = await importTextExport(parsed, (done, total, name) => {
             const pct = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 100;
             if (bar) bar.style.width = pct + '%';
             if (label) label.textContent = `importing: ${name}`;
@@ -524,7 +538,7 @@ async function importHandoffAndRefresh(file) {
             notDeidentified ? { tone: 'info', duration: 8000 } : { tone: 'success' },
         );
     } catch (err) {
-        console.error('[handoff-import] failed', err);
+        console.error('[text-import] failed', err);
         showToast(`Import failed: ${err?.message || err}`, { tone: 'error', duration: 10000 });
     } finally {
         setTimeout(() => { if (progress) progress.style.display = 'none'; }, 300);

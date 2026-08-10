@@ -80,7 +80,7 @@ async function renderFor(docId, { force } = {}) {
     if (!doc) { renderEmpty(mount); return; }
 
     // Fetch every page blob (and any OCR results, for overlays) in parallel.
-    // Documents imported from an air-gap handoff have no page images at all -
+    // Documents imported from a report-text file have no page images at all -
     // de-identification redacts text only, so the originals never leave the
     // isolated machine. For those, this pane shows the de-identified text and
     // there is nothing to fetch.
@@ -163,14 +163,14 @@ const OVERLAY_STYLES = {
 };
 
 /**
- * One page of a text-only document (imported from an air-gap handoff): the
+ * One page of a text-only document (imported from a report-text file): the
  * de-identified text where the page image would otherwise be.
  *
  * Deliberately built to the same card geometry as the image path and as
  * ocrView.js - h-8 header, body carrying the page's aspect ratio - so page N
  * still lines up across the two panes and the scroll link stays exact. Imported
  * pages get nominal dimensions at import time precisely so this holds; see
- * handoffImport.js.
+ * textImport.js.
  *
  * The body scrolls: unlike an image, text has no intrinsic height and a long
  * page would otherwise stretch the card and break the alignment.
@@ -186,13 +186,18 @@ function textPageCard(page, ocr, i) {
     const wrap = document.createElement('div');
     wrap.className = 'bg-white border border-gray-200 rounded shadow-sm';
     wrap.dataset.pageIndex = String(i);
+    // `ov-rendered` is what actually styles rendered Markdown here: the
+    // @tailwindcss/typography plugin is NOT installed, so `prose` classes are
+    // inert and Tailwind's Preflight reset would leave every heading, paragraph
+    // and table with zero margin - the text collapses into one block. The rules
+    // live in styles.css alongside the OCR pane's, which renders the same way.
     wrap.innerHTML = `
 <div class="h-8 flex items-center justify-between px-3 text-xs text-gray-500 border-b border-gray-200">
     <span>Page ${i + 1}</span>
     <span>text only</span>
 </div>
-<div class="overflow-y-auto rounded-b prose prose-sm max-w-none p-4 text-sm leading-relaxed"
-     style="aspect-ratio: ${page.width} / ${page.height}; --tw-prose-headings: #111827;">${html}</div>`;
+<div class="ov-rendered overflow-y-auto rounded-b max-w-none p-4 text-sm leading-relaxed"
+     style="aspect-ratio: ${page.width} / ${page.height};">${html}</div>`;
     return wrap;
 }
 

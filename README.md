@@ -324,15 +324,20 @@ be changed in **Settings → Mode**.
 
 | Mode | Does | For |
 | --- | --- | --- |
-| **Read** | OCR, de-identify, review text, export text or a handoff | An air-gapped or isolated machine |
-| **Extract** | Import a handoff, extract fields with an LLM, export fields | A machine that can reach an LLM but holds no scans |
+| **Read** | OCR, de-identify, review text, export report text | An air-gapped or isolated machine |
+| **Extract** | Import report text, extract fields with an LLM, export fields | A machine that can reach an LLM but holds no scans |
 | **Read + Extract** | The complete pipeline on one machine | A single machine that does everything |
 
-In Read mode there is no setup wizard, no Fields tab, and no LLM call. In
-Extract mode there is no file ingest at all — the only way in is **Import text**,
-and documents arrive already reviewed. The handoff export appears in Read mode,
-where the exportable documents are text-confirmed ones; a Read + Extract machine
-extracts locally instead, so it does not offer one.
+In Read mode there is no setup wizard, no Fields tab, and no LLM call — the
+report-text export is its only output. In Extract mode there is no file ingest
+at all: the only way in is **Import text**, and documents arrive already
+reviewed. Read + Extract offers both, so a machine that extracts locally can
+still hand its text to another machine.
+
+The two exports have different finish lines. Fields become exportable once the
+extracted fields are confirmed; report text becomes exportable as soon as the
+**text** is confirmed, and stays so afterwards. The Export menu shows a count
+beside each.
 
 Changing the mode **reloads the page**. The value is read while modules are
 still loading — `STATUS_META` is rewritten and the sidebar's filter chips are
@@ -340,15 +345,16 @@ computed as module constants — so it cannot be swapped live. Documents already
 loaded are kept untouched across the switch; they simply stop advancing if the
 new mode has no stage for them, and resume if you switch back.
 
-A build can ship a default with `VITE_DEFAULT_PIPELINE_MODE`, which suppresses
-the first-run question. The Docker image sets `read` for exactly this reason.
+A build can ship a default with `VITE_DEFAULT_PIPELINE_MODE`, suppressing the
+first-run question. Nothing sets it: the Docker image runs on every kind of
+machine, so it asks rather than guessing.
 
 ## Split workflow: OCR on the air-gapped machine, extraction elsewhere
 
 The two halves of the pipeline can run on different machines. OCR and
 de-identification happen on the isolated host; field extraction needs an LLM,
-which that host cannot reach. A **handoff file** carries the de-identified text
-across.
+which that host cannot reach. A **report-text file** carries the de-identified
+text across.
 
 This works because extraction only ever sees text — it builds a plain string
 from the OCR pages and drops it into a prompt (`src/extraction/prompts.js`).
@@ -356,11 +362,11 @@ Page images are never sent to the LLM, so their absence costs extraction
 nothing.
 
 **On the air-gapped machine** (Read mode), confirm the text as usual, then
-**Export → Download handoff (JSON)**. You get one file:
+**Export → Report text as JSON**. You get one file:
 
 ```json
 {
-  "format": "doe-ocr-handoff",
+  "format": "doe-report-text",
   "formatVersion": 1,
   "documents": [
     {
@@ -373,26 +379,25 @@ nothing.
 }
 ```
 
-Pages stay separate here, unlike the flat `ocr-text` export, whose
-`--- Page N ---` separators are omitted entirely for single-page documents and
-so cannot be parsed back reliably. Both exports remain available; this one is
-for the machine round-trip.
+Pages stay separate, which is what makes the file importable again: joining
+them into one string with `--- Page N ---` separators cannot be reversed,
+because a single-page document gets no separator at all.
 
-**On the LLM-connected machine** (any normal build), **Import text** and pick
-the file. Documents arrive at `ocr-confirmed` — the text was already reviewed —
-and go straight into the extraction queue. Results join back to the originals on
-`TCode` / `CB_DOCID`.
+**On the LLM-connected machine** (Extract or Read + Extract), **Import text**
+and pick the file. Documents arrive at `ocr-confirmed` — the text was already
+reviewed — and go straight into the extraction queue. Results join back to the
+originals on `TCode` / `CB_DOCID`.
 
 Imported reports have **no page images**, by design: de-identification redacts
-text only, so the original scans still contain PHI and stay on the air-gapped
-host. The viewer pane shows the de-identified text in their place, so extracted
+text only, so the original scans still contain PHI and stay on the machine that
+read them. The viewer pane shows the de-identified text in their place, so extracted
 fields can still be checked against their source.
 
 `deidentified` means *every page carries a de-identification record* — not
 *something was redacted*. A page with no PHI and a page that was never analyzed
 both produce zero redactions, and only the record distinguishes them. It is
 recorded, not enforced: a document that skipped de-identification is exported
-with the flag `false` and imported as-is, so **a handoff file can contain
+with the flag `false` and imported as-is, so **a report-text file can contain
 identifiable text** and should be handled accordingly in transit and at rest.
 Export and import both say so in a notification when it happens.
 

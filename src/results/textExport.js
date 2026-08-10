@@ -1,23 +1,22 @@
 /**
- * The air-gap handoff format: OCR'd, de-identified text leaving the isolated
- * machine so an LLM-connected one can run field extraction on it.
+ * The report-text export: OCR'd, de-identified text leaving one machine so
+ * another can run field extraction on it.
  *
  * The two halves of this tool can run on different machines. OCR and
- * de-identification happen on an air-gapped host running in Read mode;
- * extraction needs an LLM, which that host cannot reach, so another machine
- * runs in Extract mode. See src/core/mode.js. This file crosses the gap.
+ * de-identification happen on a host running in Read mode; extraction needs an
+ * LLM, so another machine runs in Extract mode. See src/core/mode.js. This file
+ * is what moves between them.
  *
- * Deliberately NOT the same as the `ocr-text` export. That one is a flat
- * analyst-facing artifact: one string per document, pages joined with
- * `--- Page N ---` separators that a single-page document does not get at all,
- * so page boundaries cannot be recovered reliably. This one is a machine
- * round-trip, so pages stay separate and identity is explicit.
+ * Deliberately NOT the same as a flat text dump. Pages stay separate here, so
+ * page boundaries survive the round trip; joining them into one string with
+ * `--- Page N ---` separators cannot be reversed reliably, because a
+ * single-page document gets no separator at all.
  *
  * Page IMAGES never appear here, and that is the point rather than an
  * omission: de-identification redacts text only, so the original page images
- * still carry PHI and must not leave the air-gapped host. A document imported
- * from a handoff therefore has no images, and the review pane shows its
- * de-identified text instead (see reportViewer.js).
+ * still carry PHI and must not leave the machine that holds them. A document
+ * imported from one of these files therefore has no images, and the review pane
+ * shows its de-identified text instead (see reportViewer.js).
  *
  * `deidentified` is per document and means "every page carries a current-schema
  * de-identification record" - NOT "something was redacted". A page with no PHI
@@ -28,21 +27,21 @@
  */
 
 /** Identifies the file. Present so a stray JSON cannot be mistaken for one. */
-export const HANDOFF_FORMAT = 'doe-ocr-handoff';
+export const TEXT_EXPORT_FORMAT = 'doe-report-text';
 
 /** Bumped only for breaking shape changes; the importer rejects what it cannot read. */
-export const HANDOFF_VERSION = 1;
+export const TEXT_EXPORT_VERSION = 1;
 
 /**
- * Assemble the handoff object.
+ * Assemble the export object.
  *
  * @param {{doc: object, pages: {index: number, text: string}[], deidentified: boolean}[]} entries
  * @returns {object} the object to serialize
  */
-export function buildHandoff(entries) {
+export function buildTextExport(entries) {
     return {
-        format: HANDOFF_FORMAT,
-        formatVersion: HANDOFF_VERSION,
+        format: TEXT_EXPORT_FORMAT,
+        formatVersion: TEXT_EXPORT_VERSION,
         exportedAt: new Date().toISOString(),
         documents: entries.map(({ doc, pages, deidentified }) => ({
             fileName: doc.name || '',
@@ -61,16 +60,16 @@ export function buildHandoff(entries) {
 }
 
 /**
- * Parse and validate a handoff file.
+ * Parse and validate a report-text file.
  *
  * Throws with a message worth showing the user: this reads a file that was
- * hand-carried across an air gap, where "it silently imported nothing" is a far
+ * hand-carried between machines, where "it silently imported nothing" is a far
  * worse outcome than a blunt error.
  *
  * @param {string} json raw file contents
  * @returns {{exportedAt: string|null, documents: object[]}}
  */
-export function parseHandoff(json) {
+export function parseTextExport(json) {
     let data;
     try {
         data = JSON.parse(json);
@@ -78,21 +77,22 @@ export function parseHandoff(json) {
         throw new Error(`Not valid JSON: ${err.message}`);
     }
     if (!data || typeof data !== 'object' || Array.isArray(data)) {
-        throw new Error('Not a handoff file: expected a JSON object.');
+        throw new Error('Not a report-text file: expected a JSON object.');
     }
-    if (data.format !== HANDOFF_FORMAT) {
+    if (data.format !== TEXT_EXPORT_FORMAT) {
         throw new Error(
-            `Not a handoff file (format is ${JSON.stringify(data.format ?? null)}, expected "${HANDOFF_FORMAT}"). ` +
-            'The plain ocr-text export cannot be imported - it does not keep page boundaries.',
+            `Not a report-text file (format is ${JSON.stringify(data.format ?? null)}, `
+            + `expected "${TEXT_EXPORT_FORMAT}"). Files exported by an older build are not read by this one - `
+            + 're-export them from the machine that produced them.',
         );
     }
-    if (data.formatVersion > HANDOFF_VERSION) {
+    if (data.formatVersion > TEXT_EXPORT_VERSION) {
         throw new Error(
-            `This file is version ${data.formatVersion}; this build reads up to ${HANDOFF_VERSION}. Update the app.`,
+            `This file is version ${data.formatVersion}; this build reads up to ${TEXT_EXPORT_VERSION}. Update the app.`,
         );
     }
     if (!Array.isArray(data.documents)) {
-        throw new Error('Malformed handoff file: "documents" is not an array.');
+        throw new Error('Malformed report-text file: "documents" is not an array.');
     }
 
     const documents = data.documents.map((d, i) => {

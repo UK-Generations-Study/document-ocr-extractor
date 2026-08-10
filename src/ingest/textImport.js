@@ -1,23 +1,23 @@
 /**
- * Load a handoff file (see src/results/handoff.js) as documents ready for
- * extraction - the receiving half of the air-gapped split workflow.
+ * Load a report-text file (see src/results/textExport.js) as documents ready
+ * for extraction - the receiving half of the split workflow.
  *
  * These documents have no page images, on purpose: de-identification redacts
- * text only, so the originals stay on the air-gapped host. That makes them the
- * one kind of document in the app whose pages have no blob, which is what
- * `textOnly` marks so the UI can render text where it would otherwise draw a
- * page image.
+ * text only, so the originals stay on the machine that read them. That makes
+ * them the one kind of document in the app whose pages have no blob, which is
+ * what `textOnly` marks so the UI can render text where it would otherwise
+ * draw a page image.
  *
  * Each page is stored as an ordinary ocrPage whose `markdown` is the
  * transferred text and which carries NO `deid` record. That is not a shortcut:
  * pageOutputText returns `markdown` verbatim when there are no de-identification
- * units (deidentify.js), so extraction sees exactly the bytes that crossed the
- * gap - no re-derivation, nothing to drift. The text arrived already redacted;
- * re-analyzing it would only find PHI that is no longer there.
+ * units (deidentify.js), so extraction sees exactly the bytes that were
+ * exported - no re-derivation, nothing to drift. The text arrived already
+ * redacted; re-analyzing it would only find PHI that is no longer there.
  *
  * Imported documents land at 'ocr-confirmed'. The text was reviewed on the
  * other machine, so the OCR review stage is already done, and that status is
- * exactly the handoff point into the extraction queue (see app.js's status
+ * exactly the hand-off point into the extraction queue (see app.js's status
  * routing). It also keeps them out of the OCR queue permanently: nothing but
  * the OCR queue writes 'ocr-failed', and only 'queued' enqueues OCR, so a
  * document that never enters cannot be sent back to it by Retry.
@@ -53,13 +53,13 @@ function yyyymmToLabel(ym) {
 }
 
 /**
- * Create documents from a parsed handoff.
+ * Create documents from a parsed report-text file.
  *
- * @param {{documents: object[]}} parsed output of parseHandoff
+ * @param {{documents: object[]}} parsed output of parseTextExport
  * @param {(done: number, total: number, label: string) => void} [onProgress]
  * @returns {Promise<{docIds: string[], pageCount: number, notDeidentified: number}>}
  */
-export async function importHandoff(parsed, onProgress) {
+export async function importTextExport(parsed, onProgress) {
     const docs = parsed.documents;
     const docIds = [];
     let pageCount = 0;
@@ -96,7 +96,7 @@ export async function importHandoff(parsed, onProgress) {
                 height: NOMINAL_PAGE_HEIGHT,
                 stageMs: {},
                 totalMs: 0,
-                source: 'handoff',
+                source: 'imported',
                 updatedAt: Date.now(),
             });
             pageCount++;

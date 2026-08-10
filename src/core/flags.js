@@ -23,7 +23,7 @@ const mode = getPipelineMode();
 
 /**
  * Reading half available: file/PDF ingest, the OCR engines, the text review
- * stage. False in Extract mode, where documents arrive as text via a handoff
+ * stage. False in Extract mode, where documents arrive as text via an import
  * and there is nothing to OCR.
  */
 export const canRead = mode !== PIPELINE_MODES.EXTRACT;
@@ -39,7 +39,15 @@ export const canRead = mode !== PIPELINE_MODES.EXTRACT;
 export const canExtract = mode !== PIPELINE_MODES.READ;
 
 /**
- * Handoff import is offered wherever extraction can consume it. In Read mode
- * there is nothing to do with imported text, so the entry point is hidden.
+ * Importing report text is offered wherever extraction can consume it. In Read
+ * mode there is nothing to do with imported text, so the entry point is hidden.
  */
-export const canImportHandoff = canExtract;
+export const canImportText = canExtract;
+
+/**
+ * Exporting report text is offered wherever text is produced. Both reading
+ * modes can hand their reviewed text to another machine; Extract mode only
+ * ever received text from elsewhere, so re-exporting it would be a round trip
+ * to nowhere.
+ */
+export const canExportText = canRead;

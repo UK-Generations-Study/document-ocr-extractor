@@ -66,6 +66,9 @@ export async function openSettingsPanel(deps) {
     const providerLabel = { openai: 'OpenAI / compatible', gemini: 'Google Gemini', webllm: 'In-browser (WebLLM)' }[status.provider] || '—';
     const schemaLabel = status.currentSchemaUrl ? prettySchemaLabel(status.currentSchemaUrl) : '—';
 
+    // Which tabs this mode actually shows, and therefore which panel opens.
+    const visibleTabs = TABS.filter((t) => !(t.id === 'extraction' && !canExtract));
+
     mount.innerHTML = `
 <div id="sp-overlay" class="fixed inset-0 z-50 flex items-center justify-center bg-gray-900/40 p-4">
     <div class="w-full max-w-lg max-h-[85vh] rounded-lg bg-white shadow-xl border border-gray-200 flex flex-col" role="dialog" aria-modal="true">
@@ -79,7 +82,7 @@ export async function openSettingsPanel(deps) {
         </div>
         <div class="px-5 border-b border-gray-100">
             <nav class="-mb-px flex gap-4" role="tablist">
-                ${TABS.filter((t) => !(t.id === 'extraction' && !canExtract)).map((t, i) => `
+                ${visibleTabs.map((t, i) => `
                 <button type="button" role="tab" data-tab="${t.id}"
                         class="sp-tab whitespace-nowrap border-b-2 py-2 px-1 text-sm font-medium ${
                             i === 0 ? 'border-green-600 text-green-700' : 'border-transparent text-gray-500 hover:text-gray-700'}">
@@ -88,9 +91,14 @@ export async function openSettingsPanel(deps) {
             </nav>
         </div>
         <div class="p-5 overflow-y-auto min-h-[20rem]">
-            <!-- Extraction: schema / provider / model (absent when extraction is off) -->
+            <!-- Extraction: schema / provider / model (absent when extraction is off).
+                 Every panel starts hidden; the first VISIBLE one is revealed
+                 after mount. Marking one visible in the markup breaks whenever
+                 that panel is the one omitted - which is exactly what happened
+                 in Read mode, where the whole body rendered blank until a tab
+                 was clicked. -->
             ${!canExtract ? '' : `
-            <div class="sp-panel" data-panel="extraction">
+            <div class="sp-panel hidden" data-panel="extraction">
             <section>
                 <h3 class="text-xs font-semibold uppercase tracking-wide text-gray-500">Configuration</h3>
                 <dl class="mt-2 divide-y divide-gray-100 border border-gray-200 rounded-md">
@@ -254,6 +262,10 @@ export async function openSettingsPanel(deps) {
     mount.querySelector('#sp-overlay').addEventListener('click', (e) => {
         if (e.target === mount.querySelector('#sp-overlay')) close();
     });
+
+    // Open on the first tab that this mode actually shows. Derived rather than
+    // baked into the markup, so omitting a panel can never leave the body blank.
+    mount.querySelector(`.sp-panel[data-panel="${visibleTabs[0].id}"]`)?.classList.remove('hidden');
 
     // Tabs. Panels stay in the DOM (just hidden) so every control keeps its
     // wiring and state whichever tab is showing.

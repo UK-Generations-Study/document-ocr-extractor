@@ -42,36 +42,11 @@ export function combineExtractedData(reports) {
     }, []);
 }
 
-/**
- * Combine reviewed OCR text into a flat array, for OCR-only builds where
- * there are no extracted fields to export.
- *
- * Same identifier columns as combineExtractedData (TCode / CB_DOCID /
- * yearmonth / fileName) so the two outputs join the same way, plus the page
- * count and the confirmed text of the whole report.
- *
- * @param {Object[]} reports - Report records to export
- * @param {Map<string, string>} textByDoc - docId -> concatenated OCR markdown
- * @returns {Object[]} - Combined rows, identifiers first
- */
-export function combineOcrText(reports, textByDoc) {
-    const anyMetadata = reports.some((r) => r.metadata);
-    return reports.map((r) => {
-        const identifiers = anyMetadata
-            ? {
-                TCode: r.metadata?.tcode ?? null,
-                CB_DOCID: r.metadata?.docid ?? null,
-                yearmonth: r.metadata?.yearmonth ?? null,
-            }
-            : {};
-        return {
-            ...identifiers,
-            fileName: r.name,
-            pages: r.pages?.length ?? 0,
-            text: textByDoc.get(r.id) ?? '',
-        };
-    });
-}
+// A flat one-row-per-report text export used to live here, joining every page
+// into a single string. It is gone: Read mode exports report text via
+// src/results/textExport.js instead, which keeps pages separate so the file can
+// be imported again. The flat form could not be - a single-page document got no
+// "--- Page N ---" separator, so page boundaries were unrecoverable.
 
 /**
  * Convert JSON data to CSV format
