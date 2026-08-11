@@ -125,19 +125,6 @@ Imported reports have no page images, because de-identification redacts text
 only and the original scans stay on the machine that read them. The viewer
 shows the de-identified text instead.
 
-`deidentified` records whether every page carries a de-identification record.
-It is not enforced. A document that skipped de-identification is exported with
-the flag set to `false`, so a report-text file can contain identifiable text.
-Export and import both report this in a notification.
-
-### Performance without a GPU
-
-Quick Read requests WebGPU and falls back to CPU threads when no adapter
-exists, which is common on a virtual machine. The WASM backend uses
-`min(hardwareConcurrency, 8)` threads when the page is cross-origin isolated.
-Append `?ortThreads=N` to the URL to override, for example
-`http://localhost:7777/?ortThreads=1` for single-threaded OCR.
-
 ## Development
 
 ```bash
