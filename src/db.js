@@ -1,9 +1,25 @@
 import { openDB } from 'idb';
+import { getPipelineMode } from './core/mode.js';
 
-// One connection per session: openDB() creates a fresh IndexedDB connection
-// every call, and the helpers below run dozens of times per second during
-// OCR. Cache the open promise so every helper shares a single connection.
+/**
+ * TWO databases, on purpose.
+ *
+ * The shared one holds `config` - settings, LLM credentials, the schema, the
+ * chosen model. Those describe the machine, not the work, so they must survive
+ * a change of pipeline mode; nobody wants to re-enter an API key because they
+ * switched from Extract to Read + Extract.
+ *
+ * The per-mode one holds the WORK: documents, their page blobs and their OCR
+ * results. Each mode is its own workspace, so reports read in Read mode are not
+ * waiting in Extract mode. The mode is readable synchronously at boot (see
+ * core/mode.js), so the right database opens before anything queries it - which
+ * is why no call site has to filter by mode.
+ *
+ * One connection each per session: openDB() creates a fresh connection every
+ * call, and these helpers run dozens of times per second during OCR.
+ */
 let dbPromise = null;
+let docsDbPromise = null;
 
 function getOrCreateDB() {
     if (dbPromise) return dbPromise;
@@ -50,6 +66,36 @@ function getOrCreateDB() {
         }
     });
     return dbPromise;
+}
+
+/**
+ * The per-mode workspace holding documents, page blobs and OCR results.
+ *
+ * `documents`, `blobs` and `ocrPages` are also defined in the shared database
+ * above, because they used to live there. Nothing reads them from it any more.
+ * They are left alone deliberately: dropping them would be migration code for
+ * data that is only ever cleared by hand.
+ */
+function getOrCreateDocsDB() {
+    if (docsDbPromise) return docsDbPromise;
+    const mode = getPipelineMode();
+    if (!mode) {
+        // app.js shows the blocking mode picker before mounting anything that
+        // could reach here, so this is a wiring bug rather than a user state -
+        // fail loudly instead of quietly creating a workspace under a name that
+        // no mode will ever open again.
+        throw new Error('No pipeline mode chosen: document storage is per-mode and cannot be opened yet.');
+    }
+    docsDbPromise = openDB(`medical-report-information-extractor-docs-${mode}`, 1, {
+        upgrade(db) {
+            const docs = db.createObjectStore('documents', { keyPath: 'id' });
+            docs.createIndex('byCreatedAt', 'createdAt');
+            db.createObjectStore('blobs');
+            const ocr = db.createObjectStore('ocrPages', { keyPath: 'pageBlobKey' });
+            ocr.createIndex('byDoc', 'docId');
+        },
+    });
+    return docsDbPromise;
 }
 
 /*
@@ -135,22 +181,22 @@ async function deleteUploadedFile(fileId) {
 */
 
 async function putDocument(doc) {
-    const db = await getOrCreateDB();
+    const db = await getOrCreateDocsDB();
     await db.put('documents', doc);
 }
 
 async function getDocument(id) {
-    const db = await getOrCreateDB();
+    const db = await getOrCreateDocsDB();
     return db.get('documents', id);
 }
 
 async function allDocuments() {
-    const db = await getOrCreateDB();
+    const db = await getOrCreateDocsDB();
     return db.getAllFromIndex('documents', 'byCreatedAt');
 }
 
 async function deleteDocument(id) {
-    const db = await getOrCreateDB();
+    const db = await getOrCreateDocsDB();
     const doc = await db.get('documents', id);
     if (!doc) return;
     const tx = db.transaction(['documents', 'blobs', 'ocrPages'], 'readwrite');
@@ -167,12 +213,12 @@ async function deleteDocument(id) {
 }
 
 async function putBlob(key, blob) {
-    const db = await getOrCreateDB();
+    const db = await getOrCreateDocsDB();
     await db.put('blobs', blob, key);
 }
 
 async function getBlob(key) {
-    const db = await getOrCreateDB();
+    const db = await getOrCreateDocsDB();
     return db.get('blobs', key);
 }
 
@@ -191,22 +237,22 @@ async function getBlob(key) {
 */
 
 async function putOcrPage(rec) {
-    const db = await getOrCreateDB();
+    const db = await getOrCreateDocsDB();
     await db.put('ocrPages', rec);
 }
 
 async function getOcrPage(pageBlobKey) {
-    const db = await getOrCreateDB();
+    const db = await getOrCreateDocsDB();
     return db.get('ocrPages', pageBlobKey);
 }
 
 async function getOcrPagesByDoc(docId) {
-    const db = await getOrCreateDB();
+    const db = await getOrCreateDocsDB();
     return db.getAllFromIndex('ocrPages', 'byDoc', docId);
 }
 
 async function deleteOcrPagesByDoc(docId) {
-    const db = await getOrCreateDB();
+    const db = await getOrCreateDocsDB();
     const tx = db.transaction('ocrPages', 'readwrite');
     const keys = await tx.store.index('byDoc').getAllKeys(docId);
     for (const k of keys) tx.store.delete(k);

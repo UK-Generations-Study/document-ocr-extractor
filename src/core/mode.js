@@ -49,7 +49,10 @@ const STORAGE_KEY = 'pipelineMode';
  * when the mode was a build-time flag, while the operator can still switch.
  * Unset (the ordinary build) means no default - the first-run picker asks.
  */
-const BUILD_DEFAULT = import.meta.env.VITE_DEFAULT_PIPELINE_MODE;
+// Optional-chained because this module is also pulled into the test bundle
+// (via db.js), where esbuild leaves import.meta.env undefined - there is no
+// Vite to substitute it. Absent simply means "no build default".
+const BUILD_DEFAULT = import.meta.env?.VITE_DEFAULT_PIPELINE_MODE;
 
 export const MODE_COPY = {
     [PIPELINE_MODES.READ]: {

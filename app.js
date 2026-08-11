@@ -45,6 +45,7 @@ import { initExtractionView, releaseExtractionPane, showExtractionFor } from './
 import { initTooltip } from './src/ui/tooltip.js';
 import { initStatusStrip } from './src/ui/statusStrip.js';
 import { initSyncScroll } from './src/ui/syncScroll.js';
+import { initZoom } from './src/ui/zoom.js';
 import { confirmOcr, confirmExtraction } from './src/ui/reviewFlow.js';
 import { isModalOpen } from './src/ui/toast.js';
 import { getDocument } from './src/db.js';
@@ -469,6 +470,10 @@ async function mountWorkspace() {
     // Warm the settings cache before anything renders or counts OCR
     // confidence - confidence.js reads it synchronously.
     await getSettings();
+    // Before the viewer mounts: it paints page cards at the current zoom, and
+    // reading the stored level afterwards would leave the first document at
+    // 100% until something happened to re-render it.
+    await initZoom();
     await mountReportList({ selection });
     mountReportViewer({ selection });
     initOcrView();

@@ -27,6 +27,10 @@ import { onAppEvent } from '../core/bus.js';
 import { attentionRegions } from '../ocr/confidence.js';
 import { pageOutputText } from '../deid/deidentify.js';
 import { isSyncEnabled, setSyncEnabled, onSyncToggle } from './syncScroll.js';
+import {
+    MIN_ZOOM, MAX_ZOOM, getZoom, makeDraggable, onZoomChange,
+    resetZoom, zoomAtPointer, zoomIn, zoomOut,
+} from './zoom.js';
 
 const MOUNT_ID = 'report-viewer';
 
@@ -38,6 +42,12 @@ export function mountReportViewer({ selection }) {
     renderFor(selection.getSelected());
     selection.subscribe((id) => renderFor(id));
     onSyncToggle(() => paintSyncButton());
+    // Zoom repaints in place: re-rendering would drop the object URLs and make
+    // every page flash white on each step.
+    onZoomChange(() => {
+        const mount = document.getElementById(MOUNT_ID);
+        if (mount) paintZoom(mount);
+    });
     // Redraw when OCR results land for the current doc so the low-confidence
     // overlays appear/refresh without re-selecting.
     onAppEvent((ev) => {
@@ -106,9 +116,20 @@ async function renderFor(docId, { force } = {}) {
             ${escapeHtml(title)} · ${pageEntries.length} page${pageEntries.length === 1 ? '' : 's'}${
                 textOnly ? ' · de-identified text (no page images)' : ''}
         </span>
-        <button id="rv-sync-toggle" type="button"
-                title="When linked, the OCR text pane follows this pane page-by-page (and vice versa)."
-                class="shrink-0 inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium ring-1 ring-inset"></button>
+        <span class="shrink-0 flex items-center gap-1">
+            ${textOnly ? '' : `
+            <span class="inline-flex items-center rounded-md ring-1 ring-inset ring-gray-300 overflow-hidden">
+                <button id="rv-zoom-out" type="button" title="Zoom out"
+                        class="px-1.5 py-1 text-[11px] text-gray-600 hover:bg-gray-100 disabled:opacity-40">&minus;</button>
+                <button id="rv-zoom-reset" type="button" title="Reset to fit"
+                        class="px-1 py-1 text-[11px] tabular-nums text-gray-600 hover:bg-gray-100 border-x border-gray-200 min-w-[3rem]"></button>
+                <button id="rv-zoom-in" type="button" title="Zoom in (Ctrl + scroll over a page)"
+                        class="px-1.5 py-1 text-[11px] text-gray-600 hover:bg-gray-100 disabled:opacity-40">+</button>
+            </span>`}
+            <button id="rv-sync-toggle" type="button"
+                    title="When linked, the OCR text pane follows this pane page-by-page (and vice versa)."
+                    class="shrink-0 inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium ring-1 ring-inset"></button>
+        </span>
     </div>
     <div id="rv-pages" class="space-y-4"></div>
 </div>`;
@@ -131,16 +152,26 @@ async function renderFor(docId, { force } = {}) {
         const wrap = document.createElement('div');
         wrap.className = 'bg-gray-50 border border-gray-200 rounded shadow-sm';
         wrap.dataset.pageIndex = String(i);
+        // Three nested elements, each doing one job:
+        //   .rv-viewport  fixed to the page's aspect ratio, scrolls when zoomed
+        //   .rv-scaled    transformed; carries the image AND its overlays, so
+        //                 the percentage-positioned boxes scale with the image
+        //                 and stay registered with it for free
+        //   img           always 100% of the untransformed width
+        // The viewport's size never changes, which is what keeps page N aligned
+        // with page N in the text pane and the scroll link exact.
         wrap.innerHTML = `
 <div class="h-8 flex items-center justify-between px-3 text-xs text-gray-500 border-b border-gray-200">
     <span>Page ${i + 1}</span>
     <span>${page.width} x ${page.height}</span>
 </div>
-<div class="relative">
-    <img alt="Page ${i + 1}" src="${url}" loading="lazy" decoding="async"
-         class="block w-full h-auto rounded-b"
-         style="aspect-ratio: ${page.width} / ${page.height};" />
-    ${overlaysHtml(page, ocr)}
+<div class="rv-viewport relative overflow-auto rounded-b" style="aspect-ratio: ${page.width} / ${page.height};">
+    <div class="rv-scaled relative origin-top-left" style="width: 100%;">
+        <img alt="Page ${i + 1}" src="${url}" loading="lazy" decoding="async"
+             class="block w-full h-auto select-none pointer-events-none"
+             style="aspect-ratio: ${page.width} / ${page.height};" />
+        ${overlaysHtml(page, ocr)}
+    </div>
 </div>`;
         pagesRoot.appendChild(wrap);
     }
@@ -149,7 +180,50 @@ async function renderFor(docId, { force } = {}) {
         setSyncEnabled(!isSyncEnabled());
     });
     paintSyncButton();
+    if (!textOnly) wireZoom(mount);
     if (force && keepScroll) mount.scrollTop = keepScroll;
+}
+
+/**
+ * Apply the current zoom to every page card, and keep the header controls
+ * honest about it.
+ */
+function paintZoom(mount) {
+    const z = getZoom();
+    for (const scaled of mount.querySelectorAll('.rv-scaled')) {
+        scaled.style.transform = z === 1 ? '' : `scale(${z})`;
+        // A transform does not affect layout, so without widening the box too
+        // the viewport never learns it has anything to scroll horizontally.
+        scaled.style.width = z === 1 ? '100%' : `${100 * z}%`;
+    }
+    for (const vp of mount.querySelectorAll('.rv-viewport')) {
+        vp.classList.toggle('cursor-grab', z > MIN_ZOOM);
+    }
+    const label = mount.querySelector('#rv-zoom-reset');
+    if (label) label.textContent = `${Math.round(z * 100)}%`;
+    const out = mount.querySelector('#rv-zoom-out');
+    const inc = mount.querySelector('#rv-zoom-in');
+    if (out) out.disabled = z <= MIN_ZOOM;
+    if (inc) inc.disabled = z >= MAX_ZOOM;
+}
+
+function wireZoom(mount) {
+    mount.querySelector('#rv-zoom-in')?.addEventListener('click', () => zoomIn());
+    mount.querySelector('#rv-zoom-out')?.addEventListener('click', () => zoomOut());
+    mount.querySelector('#rv-zoom-reset')?.addEventListener('click', () => resetZoom());
+
+    for (const vp of mount.querySelectorAll('.rv-viewport')) {
+        makeDraggable(vp);
+        // Ctrl/Cmd + wheel zooms about the pointer. A BARE wheel is left to
+        // bubble, so it still scrolls the pane through pages and the text pane
+        // still follows - losing that while zoomed would be a bad trade.
+        vp.addEventListener('wheel', (ev) => {
+            if (!ev.ctrlKey && !ev.metaKey) return;
+            ev.preventDefault();
+            zoomAtPointer(vp, ev, ev.deltaY < 0 ? 1 : -1);
+        }, { passive: false });
+    }
+    paintZoom(mount);
 }
 
 /** Per-kind region styling: amber = weak recognition, sky = text outside the

@@ -13,7 +13,9 @@ import { getPipelineMode, PIPELINE_MODES } from './mode.js';
  * Requires `npm run fetch-models` to have vendored them into public/models/.
  * Consumed by src/ocr/runtime/assets.ts.
  */
-export const OFFLINE_MODELS = import.meta.env.VITE_OFFLINE_MODELS === 'true';
+// Optional-chained for the same reason as mode.js: outside a Vite build
+// (the esbuild test bundle) there is no import.meta.env to read.
+export const OFFLINE_MODELS = import.meta.env?.VITE_OFFLINE_MODELS === 'true';
 
 // Null while the user has yet to choose and no build default applies. Both
 // capabilities then read true, which is harmless: app.js shows the blocking

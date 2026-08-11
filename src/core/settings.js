@@ -29,6 +29,8 @@ const DEFAULTS = {
     reviewMode: REVIEW_MODES.MANUAL,
     syncScroll: true,
     lowConfThreshold: 0.6,
+    /** Report-image magnification; 1 = fit the page card. See ui/zoom.js. */
+    reportZoom: 1,
 
     /**
      * Which halves of the pipeline this machine runs - see src/core/mode.js.

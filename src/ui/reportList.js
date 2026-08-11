@@ -84,6 +84,19 @@ let activeFilter = 'all';
 let searchTerm = '';
 
 /**
+ * Ticked rows, for bulk actions. Distinct from selectionRef, which is the ONE
+ * document open in the work panes - clicking a row still opens it, and ticking
+ * its box does not.
+ *
+ * Cleared whenever the filter or search changes: "Select all" ticks what is
+ * visible, so leaving those ticks in place while the visible set changes would
+ * mean acting on rows the user can no longer see.
+ */
+let checked = new Set();
+/** Anchor for shift-click range selection: the last row ticked by hand. */
+let lastCheckedId = null;
+
+/**
  * Mount the report queue into #report-list.
  * @param {object} deps
  * @param {{ getSelected: () => (string|null), setSelected: (id: string|null) => void,
@@ -216,10 +229,14 @@ export async function mountReportList(deps) {
         if (files.length) await ingestAndRefresh(files);
     });
 
-    // Search + selection redraw the rows.
+    // Search + selection redraw the rows. Searching changes what "Select all"
+    // means, so any existing ticks are dropped rather than left applying to
+    // rows that have scrolled out of existence.
     mount.querySelector('#rl-search').addEventListener('input', (e) => {
         searchTerm = e.target.value.trim().toLowerCase();
+        clearChecked();
         renderRows();
+        renderBatchAction();
     });
     deps.selection.subscribe(() => renderRows());
 
@@ -333,6 +350,9 @@ function renderFilters() {
     wrap.querySelectorAll('button[data-filter]').forEach((btn) => {
         btn.addEventListener('click', () => {
             activeFilter = btn.dataset.filter;
+            // Same reason as the search box: a tick made under one filter must
+            // not survive into a view where its row is not shown.
+            clearChecked();
             renderFilters();
             renderBatchAction();
             renderRows();
@@ -340,25 +360,87 @@ function renderFilters() {
     });
 }
 
+/**
+ * The selection bar: select-all, the count, and whatever bulk actions the
+ * ticked documents can actually take.
+ *
+ * This replaced a contextual bar that acted on the whole filtered set
+ * ("Confirm text for all 12"). One mechanism is easier to reason about, and
+ * that behaviour is still one click away - filter, Select all, act.
+ *
+ * An action only appears if some ticked document can take it, and it reports
+ * how many that is: a selection spanning several statuses is normal, and a
+ * button claiming more than it will do would be a lie.
+ */
 function renderBatchAction() {
     const wrap = document.getElementById('rl-batch');
     if (!wrap) return;
     const docs = visibleDocs();
-    let html = '';
-    if (activeFilter === 'check-text' && docs.length) {
-        html = batchButtonHtml('confirm-text', `Confirm text for all ${docs.length}`);
-    } else if (activeFilter === 'check-fields' && docs.length) {
-        html = batchButtonHtml('confirm-fields', `Confirm fields for all ${docs.length}`);
-    } else if (activeFilter === 'failed' && docs.length) {
-        html = batchButtonHtml('retry', `Retry all ${docs.length}`);
+    const picked = currentDocs.filter((d) => checked.has(d.id));
+
+    if (!picked.length) {
+        wrap.innerHTML = docs.length
+            ? `<button type="button" data-select-all
+                   class="text-[11px] text-gray-500 hover:text-green-800 hover:underline">Select all ${docs.length}</button>`
+            : '';
+        wrap.querySelector('[data-select-all]')?.addEventListener('click', () => {
+            for (const d of docs) checked.add(d.id);
+            renderRows();
+            renderBatchAction();
+        });
+        return;
     }
-    wrap.innerHTML = html;
-    wrap.querySelector('button[data-batch]')?.addEventListener('click', () => runBatchAction(wrap.querySelector('button[data-batch]').dataset.batch));
+
+    const count = (statuses) => picked.filter((d) => statuses.includes(d.status)).length;
+    const nText = count(['ocr-done']);
+    const nFields = count(['extraction-done']);
+    const nRetry = count(['ocr-failed', 'extraction-failed']);
+    const allVisibleTicked = docs.length > 0 && docs.every((d) => checked.has(d.id));
+
+    wrap.innerHTML = `
+<div class="rounded-md border border-green-700 bg-green-50 p-1.5 space-y-1.5">
+    <div class="flex items-center justify-between gap-2 text-[11px]">
+        <span class="font-medium text-green-900">${picked.length} selected</span>
+        <span class="flex gap-2">
+            ${allVisibleTicked ? '' : `<button type="button" data-select-all class="text-green-800 hover:underline">Select all ${docs.length}</button>`}
+            <button type="button" data-clear class="text-gray-500 hover:underline">Clear</button>
+        </span>
+    </div>
+    <div class="flex flex-wrap gap-1">
+        ${nText ? batchButtonHtml('confirm-text', `Confirm text (${nText})`) : ''}
+        ${nFields ? batchButtonHtml('confirm-fields', `Confirm fields (${nFields})`) : ''}
+        ${nRetry ? batchButtonHtml('retry', `Retry (${nRetry})`) : ''}
+        ${batchButtonHtml('delete', `Delete (${picked.length})`, true)}
+    </div>
+</div>`;
+
+    wrap.querySelector('[data-select-all]')?.addEventListener('click', () => {
+        for (const d of docs) checked.add(d.id);
+        renderRows();
+        renderBatchAction();
+    });
+    wrap.querySelector('[data-clear]')?.addEventListener('click', () => {
+        clearChecked();
+        renderRows();
+        renderBatchAction();
+    });
+    wrap.querySelectorAll('button[data-batch]').forEach((btn) => {
+        btn.addEventListener('click', () => runBatchAction(btn.dataset.batch));
+    });
 }
 
-function batchButtonHtml(action, label) {
+/** Drop every tick. Called on filter/search changes and after a bulk action. */
+function clearChecked() {
+    checked = new Set();
+    lastCheckedId = null;
+}
+
+function batchButtonHtml(action, label, danger = false) {
+    const tone = danger
+        ? 'border-red-300 bg-white text-red-700 hover:bg-red-50'
+        : 'border-green-700 bg-white text-green-800 hover:bg-green-100';
     return `<button type="button" data-batch="${action}"
-        class="w-full rounded-md border border-green-700 bg-green-50 px-2 py-1.5 text-xs font-medium text-green-800 hover:bg-green-100">
+        class="rounded-md border px-2 py-1 text-[11px] font-medium ${tone}">
         ${label}
     </button>`;
 }
@@ -368,30 +450,54 @@ async function runBatchAction(action) {
     // (e.g. flagged-mode auto-confirm), and acting on stale rows could rewind
     // a doc that has already progressed.
     currentDocs = await allDocuments();
-    const docs = visibleDocs();
-    if (!docs.length) return;
+    const picked = currentDocs.filter((d) => checked.has(d.id));
+    if (!picked.length) return;
+
     if (action === 'confirm-text') {
+        const targets = picked.filter((d) => d.status === 'ocr-done');
+        if (!targets.length) return;
         const ok = await confirmDialog({
             title: 'Confirm OCR text in bulk',
-            bodyHtml: `Approve the OCR text of <strong>${docs.length}</strong> report${docs.length === 1 ? '' : 's'} without individual review? They will be queued for extraction.`,
-            confirmLabel: `Confirm ${docs.length}`,
+            bodyHtml: `Approve the OCR text of <strong>${targets.length}</strong> report${targets.length === 1 ? '' : 's'} without individual review?${canExtract ? ' They will be queued for extraction.' : ''}`,
+            confirmLabel: `Confirm ${targets.length}`,
         });
         if (!ok) return;
-        for (const d of docs) if (d.status === 'ocr-done') await confirmOcr(d.id, { advance: false });
-        showToast(`${docs.length} report${docs.length === 1 ? '' : 's'} queued for extraction.`, { tone: 'success' });
+        for (const d of targets) await confirmOcr(d.id, { advance: false });
+        showToast(`${targets.length} report${targets.length === 1 ? '' : 's'} confirmed.`, { tone: 'success' });
     } else if (action === 'confirm-fields') {
+        const targets = picked.filter((d) => d.status === 'extraction-done');
+        if (!targets.length) return;
         const ok = await confirmDialog({
             title: 'Confirm extracted fields in bulk',
-            bodyHtml: `Mark the extracted fields of <strong>${docs.length}</strong> report${docs.length === 1 ? '' : 's'} as final without individual review?`,
-            confirmLabel: `Confirm ${docs.length}`,
+            bodyHtml: `Mark the extracted fields of <strong>${targets.length}</strong> report${targets.length === 1 ? '' : 's'} as final without individual review?`,
+            confirmLabel: `Confirm ${targets.length}`,
         });
         if (!ok) return;
-        for (const d of docs) if (d.status === 'extraction-done') await confirmExtraction(d.id, { advance: false });
-        showToast(`${docs.length} report${docs.length === 1 ? '' : 's'} marked done.`, { tone: 'success' });
+        for (const d of targets) await confirmExtraction(d.id, { advance: false });
+        showToast(`${targets.length} report${targets.length === 1 ? '' : 's'} marked done.`, { tone: 'success' });
     } else if (action === 'retry') {
-        for (const d of docs) await retryDoc(d);
-        showToast(`Retrying ${docs.length} report${docs.length === 1 ? '' : 's'}.`);
+        const targets = picked.filter((d) => d.status === 'ocr-failed' || d.status === 'extraction-failed');
+        if (!targets.length) return;
+        for (const d of targets) await retryDoc(d);
+        showToast(`Retrying ${targets.length} report${targets.length === 1 ? '' : 's'}.`);
+    } else if (action === 'delete') {
+        const ok = await confirmDialog({
+            title: `Delete ${picked.length} report${picked.length === 1 ? '' : 's'}`,
+            bodyHtml: `Delete <strong>${picked.length}</strong> report${picked.length === 1 ? '' : 's'} and their OCR text and extracted fields? This cannot be undone.`,
+            confirmLabel: `Delete ${picked.length}`,
+            danger: true,
+        });
+        if (!ok) return;
+        const openDoc = selectionRef?.getSelected();
+        for (const d of picked) {
+            await deleteDocument(d.id);
+            emitAppEvent({ source: 'ui', type: 'doc-deleted', docId: d.id });
+        }
+        if (openDoc && checked.has(openDoc)) selectionRef.setSelected(null);
+        showToast(`Deleted ${picked.length} report${picked.length === 1 ? '' : 's'}.`, { tone: 'success' });
     }
+
+    clearChecked();
     await refresh();
 }
 
@@ -643,11 +749,40 @@ function renderRows() {
     }
     scroll.innerHTML = html;
 
-    // Row click -> select.
+    // Row click -> open in the work panes. The checkbox is excluded so ticking
+    // for a bulk action never yanks the viewer to a different document.
     scroll.querySelectorAll('[data-doc-id]').forEach((row) => {
         row.addEventListener('click', (ev) => {
-            if (ev.target.closest('button')) return; // don't select when clicking Delete
+            if (ev.target.closest('button') || ev.target.closest('input[type="checkbox"]')) return;
             selectionRef?.setSelected(row.dataset.docId);
+        });
+    });
+
+    // Checkboxes. Shift-click extends from the last box ticked by hand, over
+    // the rows as currently displayed - which is what the eye expects, even
+    // though the underlying list is grouped by TCode rather than flat.
+    scroll.querySelectorAll('input[data-check-id]').forEach((box) => {
+        box.addEventListener('click', (ev) => {
+            ev.stopPropagation();
+            const id = box.dataset.checkId;
+            if (ev.shiftKey && lastCheckedId && lastCheckedId !== id) {
+                const order = docs.map((d) => d.id);
+                const from = order.indexOf(lastCheckedId);
+                const to = order.indexOf(id);
+                if (from !== -1 && to !== -1) {
+                    const [lo, hi] = from < to ? [from, to] : [to, from];
+                    const on = box.checked;
+                    for (let k = lo; k <= hi; k++) {
+                        if (on) checked.add(order[k]); else checked.delete(order[k]);
+                    }
+                    renderRows();
+                    renderBatchAction();
+                    return;
+                }
+            }
+            if (box.checked) checked.add(id); else checked.delete(id);
+            lastCheckedId = id;
+            renderBatchAction();
         });
     });
 
@@ -703,6 +838,9 @@ function rowHtml(doc, isSelected, grouped) {
 <div data-doc-id="${doc.id}" ${isSelected ? 'aria-current="true"' : ''}
      title="${escapeAttr(tipParts.filter(Boolean).join(' · '))}"
      class="group cursor-pointer flex items-center gap-2 border-b border-gray-50 ${grouped ? 'pl-5' : 'pl-3'} pr-2 py-1.5 ${isSelected ? 'bg-green-50 border-l-2 border-l-green-700' : 'border-l-2 border-l-transparent hover:bg-gray-50'}">
+    <input type="checkbox" data-check-id="${doc.id}" ${checked.has(doc.id) ? 'checked' : ''}
+           aria-label="Select for bulk actions"
+           class="shrink-0 h-3.5 w-3.5 rounded border-gray-300 text-green-700 focus:ring-green-600"/>
     <span class="w-2 h-2 rounded-full shrink-0 ${status.dot}"></span>
     <span class="flex-1 min-w-0 truncate text-xs font-medium text-gray-900">${escapeHtml(label)}</span>
     ${lowConf}
