@@ -23,10 +23,7 @@ de-identified text is sent to an LLM.
 ## Requirements
 
 - Docker, for de-identification and for the packaged deployment
-
-or
-
-- Node 22 or later
+- Node 22 or later, if not using Docker
 
 ## Quick start
 
@@ -93,8 +90,7 @@ Open **http://localhost:7777**.
 Personal identifiers are removed from the OCR text using
 [Presidio](https://github.com/data-privacy-stack/presidio).
 
-If you run without the Docker image, you would need to spin up the Presidio
-docker image if you wanted to de-identify documents:
+**If you run without the Docker image, you need to spin up the Presidio docker image if you want de-identification support**:
 
 ```bash
 docker compose -f docker/presidio/compose.yaml up -d --build
