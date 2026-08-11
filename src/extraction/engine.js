@@ -3,51 +3,11 @@
  * Core orchestration for information extraction from reports
  */
 
-import { API_PROVIDERS } from '../core/constants.js';
-
-/**
- * Check for missing information required for extraction
- * @param {Object} params
- * @param {Function} params.getConfigRecord - Function to get config from DB
- * @param {Function} params.getAllUploadedFiles - Function to get uploaded files
- * @returns {Promise<string[]>} - Array of missing item descriptions
- */
-export async function getMissingInfo({ getConfigRecord, getAllUploadedFiles }) {
-    const missing = [];
-
-    // Config
-    const appConfig = await getConfigRecord('appConfig');
-    if (!appConfig) {
-        missing.push('Application configuration file (config.json)');
-    } else {
-        if (!appConfig.systemPrompt) missing.push('System prompt in configuration file');
-        if (!appConfig.schemaFiles || !appConfig.schemaFiles.length) {
-            missing.push('At least one JSON Schema in configuration file');
-        }
-    }
-
-    // Remote API credentials (always required)
-    const creds = await getConfigRecord('llmApiCreds');
-    if (!creds || !creds.apiKey) {
-        missing.push('LLM API key');
-    } else if (creds.provider === API_PROVIDERS.OPENAI && !creds.baseUrl) {
-        missing.push('LLM API Base URL (required for OpenAI-compatible APIs)');
-    }
-
-    // Model selection
-    const modelRec = await getConfigRecord('model');
-    if (!modelRec || !modelRec.name) {
-        missing.push('LLM model selection');
-    }
-
-    // Uploaded files
-    const files = await getAllUploadedFiles();
-    if (!files || !files.length) {
-        missing.push('At least one uploaded report');
-    }
-
-    return missing;
-}
+// A getMissingInfo() setup-completeness check used to live here. It had no
+// callers, and read credentials from the `llmApiCreds` config record, which
+// has not existed since credentials were stored per provider as
+// `llmApiCreds_<provider>`. It would have reported the key missing in every
+// working install. readSetupStatus() in app.js is the live equivalent.
 
 /**
  * Build extraction tasks for reports that need processing
