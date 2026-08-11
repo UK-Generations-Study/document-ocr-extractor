@@ -18,8 +18,11 @@ input_data
 
 # Saved image bundles (scripts/build-airgap.ps1 writes here by default).
 # Multi-GB, and COPY . . would otherwise fold the previous build into the next
-# one.
+# one. .tmp-*.tar* is the partial file `docker save -o` leaves behind if it is
+# interrupted; it does not match *.tar, and copying it in fails the build when
+# Tailwind scans it for class names.
 *.tar
+.tmp-*.tar*
 
 *.log
 npm-debug.log*

@@ -46,4 +46,9 @@ public/schemas/
 models/
 
 # Saved Docker image bundles for the air-gapped transfer (multi-GB).
+# The .tmp-* form is what `docker save -o` writes before renaming; an
+# interrupted save leaves one behind, and it must be ignored too. Tailwind
+# scans every non-ignored file for class names, so a stray multi-GB binary in
+# the project root fails the build with "Invalid code point".
 *.tar
+.tmp-*.tar*
