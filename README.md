@@ -148,18 +148,6 @@ To vendor the model weights locally:
 npm run fetch-models -- --deep
 ```
 
-### Model weights
-
-The build makes no network calls. Small graph files are vendored in `assets/`
-and staged by `scripts/prepare-build.mjs`.
-
-At runtime the OCR pipeline streams its large weight sidecars (about 130 MB)
-from [`jeyabbalas/private-eye-models`](https://huggingface.co/jeyabbalas/private-eye-models),
-pinned to revision `f1ec7e4` in `src/ocr/runtime/assets.ts`, and caches them in
-the browser. That repository is public, so no credentials are needed. If it
-becomes unavailable, mirror the weights and update the pinned repository and
-revision there and in `scripts/prepare-build.mjs`.
-
 ### Sample data
 
 Synthetic pathology reports are in
