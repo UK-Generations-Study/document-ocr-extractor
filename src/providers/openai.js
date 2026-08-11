@@ -5,7 +5,7 @@
 
 import { OpenAI } from 'openai';
 import { BaseLLMProvider } from './base.js';
-import { MAX_RETRIES, API_PROVIDERS } from '../core/constants.js';
+import { MAX_RETRIES, API_PROVIDERS, NO_KEY } from '../core/constants.js';
 
 export class OpenAIProvider extends BaseLLMProvider {
     /**
@@ -17,7 +17,11 @@ export class OpenAIProvider extends BaseLLMProvider {
         super(config);
         this.name = API_PROVIDERS.OPENAI;
         this.baseUrl = config.baseUrl;
-        this.apiKey = config.apiKey;
+        // A self-hosted OpenAI-compatible server (llama-server, vLLM, Ollama)
+        // usually wants no key at all, but the SDK refuses to construct without
+        // one. Send a placeholder: those servers ignore the Authorization
+        // header, and a real API would have rejected an empty key anyway.
+        this.apiKey = config.apiKey || NO_KEY;
     }
 
     /**

@@ -28,6 +28,14 @@ export const DB_KEYS = {
     MODEL: 'model'
 };
 
+/**
+ * Placeholder Authorization value for OpenAI-compatible servers that need no
+ * key - llama-server, vLLM and Ollama ignore the header entirely. The SDK
+ * refuses to construct a client without *something*, so an empty key from the
+ * user becomes this rather than being rejected before the request is made.
+ */
+export const NO_KEY = 'no-key';
+
 // Default API base URLs
 export const DEFAULT_OPENAI_BASE_URL = 'https://api.openai.com/v1';
 export const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta';

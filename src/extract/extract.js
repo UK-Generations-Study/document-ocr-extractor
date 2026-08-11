@@ -79,7 +79,14 @@ async function getProvider(docId) {
     const activeProvider = await getConfigRecord('activeProvider');
     const providerId = activeProvider?.provider || API_PROVIDERS.OPENAI;
     const creds = await getConfigRecord(`llmApiCreds_${providerId}`);
-    if (providerId !== API_PROVIDERS.WEBLLM && !creds?.apiKey) {
+    // What counts as "configured" differs by provider. Gemini needs a key;
+    // an OpenAI-compatible endpoint needs only a base URL, because a
+    // self-hosted server (llama-server, vLLM, Ollama) authenticates nothing.
+    // Requiring a key here rejected exactly those setups after the wizard had
+    // already accepted them.
+    const configured = providerId === API_PROVIDERS.WEBLLM
+        || (providerId === API_PROVIDERS.OPENAI ? !!creds?.baseUrl : !!creds?.apiKey);
+    if (!configured) {
         throw new Error('LLM credentials not configured (open Settings).');
     }
     const ctxWindow = providerId === API_PROVIDERS.WEBLLM

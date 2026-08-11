@@ -52,7 +52,7 @@ import { getDocument } from './src/db.js';
 import { enqueueDocument, primeQueueFromDb, recoverStuckDocuments } from './src/ocr/queue.js';
 import { enqueueExtraction, primeExtractionFromDb } from './src/extract/extract.js';
 
-import { API_PROVIDERS, DEFAULT_OPENAI_BASE_URL } from './src/core/constants.js';
+import { API_PROVIDERS, DEFAULT_OPENAI_BASE_URL, NO_KEY } from './src/core/constants.js';
 
 import { OpenAI } from 'openai';
 import { GoogleGenAI } from '@google/genai';
@@ -66,6 +66,15 @@ import { WebLLMProvider } from './src/providers/webllm.js';
 // list models after a key check.
 let openaiClient = null;
 let geminiClient = null;
+// The model ids that came back when the client above was validated.
+//
+// Cached ALONGSIDE the client, because "I have a working client" and "I know
+// what models it offers" are different facts and conflating them is what made
+// the wizard's model list come back empty: readSetupStatus only fetched the
+// list on the path where no client was cached, and by the time the wizard's
+// model step ran, one always was.
+let openaiModelIds = [];
+let geminiModelIds = [];
 
 // =============================================================================
 // CONFIG LOADING
@@ -167,7 +176,9 @@ async function fetchAndValidateConfig(configUrl) {
 
 async function validateOpenAiKey(baseUrl, apiKey) {
     try {
-        const c = new OpenAI({ baseURL: baseUrl, apiKey, dangerouslyAllowBrowser: true });
+        // NO_KEY when the user left it blank: llama-server and friends ignore
+        // the header, and the SDK will not construct a client without a value.
+        const c = new OpenAI({ baseURL: baseUrl, apiKey: apiKey || NO_KEY, dangerouslyAllowBrowser: true });
         const resp = await c.models.list();
         return { ok: true, client: c, modelIds: resp.data.map((m) => m.id).sort() };
     } catch (err) {
@@ -224,13 +235,17 @@ async function validateAndSaveCreds(provider, apiKey, baseUrl, extras = {}) {
         res = await validateGeminiKey(apiKey);
         if (res.ok) {
             geminiClient = res.client;
+            geminiModelIds = res.modelIds || [];
             openaiClient = null;
+            openaiModelIds = [];
         }
     } else {
         res = await validateOpenAiKey(baseUrl, apiKey);
         if (res.ok) {
             openaiClient = res.client;
+            openaiModelIds = res.modelIds || [];
             geminiClient = null;
+            geminiModelIds = [];
         }
     }
     if (!res.ok) return { ok: false, error: res.error };
@@ -280,20 +295,28 @@ async function readSetupStatus() {
         modelIds = await listWebllmModels();
     } else if (provider === API_PROVIDERS.GEMINI && geminiCreds?.apiKey) {
         credsOk = !!geminiClient; // require an active client, else force revalidation
+        modelIds = geminiModelIds;
         if (!credsOk) {
             const v = await validateGeminiKey(geminiCreds.apiKey);
             if (v.ok) {
                 geminiClient = v.client;
+                geminiModelIds = v.modelIds;
                 modelIds = v.modelIds;
                 credsOk = true;
             }
         }
-    } else if (provider === API_PROVIDERS.OPENAI && openaiCreds?.apiKey) {
+    // Only a base URL is required: a self-hosted OpenAI-compatible server
+    // typically wants no API key, so an empty one must not disqualify the
+    // credentials (it used to skip this branch entirely, leaving the wizard
+    // with no models and no explanation).
+    } else if (provider === API_PROVIDERS.OPENAI && openaiCreds?.baseUrl) {
         credsOk = !!openaiClient;
+        modelIds = openaiModelIds;
         if (!credsOk) {
             const v = await validateOpenAiKey(openaiCreds.baseUrl, openaiCreds.apiKey);
             if (v.ok) {
                 openaiClient = v.client;
+                openaiModelIds = v.modelIds;
                 modelIds = v.modelIds;
                 credsOk = true;
             }

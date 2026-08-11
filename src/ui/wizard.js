@@ -114,7 +114,12 @@ function wizardOverlayHtml() {
 </div>`;
 }
 
-async function renderStep(n) {
+/**
+ * @param {number} n step to show
+ * @param {string[]} [modelIds] models just listed by a credential check, used
+ *   in preference to whatever readSetupStatus reports for step 3.
+ */
+async function renderStep(n, modelIds) {
     currentStep = n;
     const label = document.getElementById('wizard-step-label');
     if (label) label.textContent = `Step ${n} of 3`;
@@ -135,7 +140,7 @@ async function renderStep(n) {
 
     if (n === 1) return renderSchemaStep(body, footer, status);
     if (n === 2) return renderCredsStep(body, footer, status);
-    if (n === 3) return renderModelStep(body, footer, status);
+    if (n === 3) return renderModelStep(body, footer, status, modelIds);
 }
 
 // ---------- Step 1: schema ----------
@@ -256,9 +261,14 @@ function renderCredsStep(body, footer, status) {
                class="mt-1 block w-full rounded-md border border-gray-300 px-3 py-1.5 text-sm focus:border-green-600 focus:outline-none focus:ring-1 focus:ring-green-600"/>
     </div>
     <div>
-        <label for="creds-openai-key" class="block text-xs font-medium text-gray-700">API key</label>
-        <input type="password" id="creds-openai-key" placeholder="sk-..."
+        <label for="creds-openai-key" class="block text-xs font-medium text-gray-700">
+            API key <span class="font-normal text-gray-400">— leave blank for a server that needs none</span>
+        </label>
+        <input type="password" id="creds-openai-key" placeholder="sk-…"
                class="mt-1 block w-full rounded-md border border-gray-300 px-3 py-1.5 text-sm focus:border-green-600 focus:outline-none focus:ring-1 focus:ring-green-600"/>
+        <p class="mt-1 text-xs text-gray-500">
+            Self-hosted servers (llama-server, vLLM, Ollama) usually authenticate nothing.
+        </p>
     </div>
 </div>
 <div id="creds-panel-${API_PROVIDERS.GEMINI}" class="creds-panel mt-4 space-y-3 hidden">
@@ -342,15 +352,21 @@ function renderCredsStep(body, footer, status) {
             if (!apiKey) { showCredsStatus('Enter your Gemini API key.', false); return; }
         } else {
             baseUrl = openaiBase.value.trim();
+            // Key deliberately optional: a self-hosted OpenAI-compatible
+            // server (llama-server, vLLM, Ollama) authenticates nothing, and
+            // demanding a throwaway value here served no purpose. Hosted APIs
+            // still reject a missing key themselves, at validation.
             apiKey = openaiKey.value.trim();
             if (!baseUrl) { showCredsStatus('Enter a Base URL.', false); return; }
-            if (!apiKey) { showCredsStatus('Enter your API key.', false); return; }
         }
         showCredsStatus(provider === API_PROVIDERS.WEBLLM ? 'Saving provider…' : 'Validating credentials…', null);
         const res = await deps.validateAndSaveCreds(provider, apiKey, baseUrl, extras);
         if (!res.ok) { showCredsStatus(res.error || 'Credentials rejected.', false); return; }
         showCredsStatus(provider === API_PROVIDERS.WEBLLM ? 'Provider selected.' : 'Credentials saved.', true);
-        await renderStep(3);
+        // Hand the freshly-listed models straight to the model step. It also
+        // reads them from readSetupStatus, but passing them makes the step
+        // independent of whether that call happens to re-list.
+        await renderStep(3, res.modelIds);
     });
 }
 
@@ -364,7 +380,7 @@ function showCredsStatus(msg, ok) {
 
 // ---------- Step 3: model ----------
 
-async function renderModelStep(body, footer, status) {
+async function renderModelStep(body, footer, status, freshModelIds) {
     body.innerHTML = `
 <h3 class="text-base font-semibold text-gray-900">Choose a model</h3>
 <p class="text-sm text-gray-600 mt-1">
@@ -381,7 +397,7 @@ async function renderModelStep(body, footer, status) {
 `;
 
     const select = body.querySelector('#model-select');
-    const ids = status.modelIds || [];
+    const ids = (freshModelIds?.length ? freshModelIds : status.modelIds) || [];
     if (!ids.length) {
         showModelStatus('No models returned by the provider. Go back and check your credentials.', false);
     } else {
