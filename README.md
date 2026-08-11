@@ -11,7 +11,6 @@ Document images never leave the machine. OCR runs in the browser; only
 de-identified text is sent to an LLM.
 
 - [Requirements](#requirements)
-- [Quick start](#quick-start)
 - [Pipeline modes](#pipeline-modes)
 - [Docker deployment](#docker-deployment)
 - [De-identification](#de-identification)
@@ -25,21 +24,6 @@ de-identified text is sent to an LLM.
 - Docker, for de-identification and for the packaged deployment
 - Node 22 or later, if not using Docker
 
-## Quick start
-
-```bash
-npm install
-npm run dev
-```
-
-Open the printed URL. On first launch the app asks which
-[pipeline mode](#pipeline-modes) to run.
-
-For LLM extraction you also need an endpoint. The setup wizard accepts an
-OpenAI-compatible API, Google Gemini, or an in-browser model that needs no
-key. Self-hosted servers such as llama-server, vLLM and Ollama work with a
-base URL and no API key.
-
 ## Pipeline modes
 
 The tool has two halves, reading and extracting, which can run on separate
@@ -52,8 +36,10 @@ machines. The mode is chosen on first launch and can be changed in
 | **Extract** | Import report text, extract fields, export fields | A machine with LLM access but no scans |
 | **Read + Extract** | The full pipeline | A single machine that does everything |
 
-Each mode has its own document storage. Reports loaded in one mode do not
-appear in another. Settings, credentials and the schema are shared.
+For LLM extraction you also need an endpoint. The setup wizard accepts an
+OpenAI-compatible API, Google Gemini, or an in-browser model that needs no
+key. Self-hosted servers such as llama-server, vLLM and Ollama work with a
+base URL and no API key.
 
 ## Docker deployment
 
