@@ -1,5 +1,7 @@
 # Document OCR Extractor
 
+## Live: 🔗 https://uk-generations-study.github.io/document-ocr-extractor/
+
 Browser-based tool that turns batches of scanned or PDF documents into
 structured data. It runs OCR on each page, removes personal identifiers, and
 uses a large language model to extract the fields described by a JSON Schema.
@@ -11,18 +13,20 @@ de-identified text is sent to an LLM.
 - [Requirements](#requirements)
 - [Quick start](#quick-start)
 - [Pipeline modes](#pipeline-modes)
+- [Docker deployment](#docker-deployment)
 - [De-identification](#de-identification)
 - [Splitting the pipeline across machines](#splitting-the-pipeline-across-machines)
-- [Docker deployment](#docker-deployment)
 - [Development](#development)
 - [Provenance](#provenance)
 - [License](#license)
 
 ## Requirements
 
-- Node 22 or later
-- A WebGPU-capable browser (recent Chrome or Edge on desktop)
 - Docker, for de-identification and for the packaged deployment
+
+or
+
+- Node 22 or later
 
 ## Quick start
 
@@ -54,11 +58,43 @@ machines. The mode is chosen on first launch and can be changed in
 Each mode has its own document storage. Reports loaded in one mode do not
 appear in another. Settings, credentials and the schema are shared.
 
+## Docker deployment
+
+Two images: the app, with all OCR model weights baked in, and the Presidio
+analyzer. Neither needs network access at runtime. No LLM weights are bundled.
+
+Build on a machine with internet access:
+
+```bash
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-airgap.ps1
+```
+
+This produces `airgap-bundle.tar` (about 4.4 GB) containing both images. Add
+`-QuickReadOnly` to omit the Deep Read model and save about 1.4 GB. The
+equivalent by hand:
+
+```bash
+docker build --platform linux/amd64 --build-arg "FETCH_DEEP=--deep" -t document-ocr-extractor:latest .
+docker build --platform linux/amd64 -t document-ocr-extractor-presidio:latest docker/presidio
+docker save -o airgap-bundle.tar document-ocr-extractor:latest document-ocr-extractor-presidio:latest
+```
+
+Copy `airgap-bundle.tar` and `compose.yaml` to the target machine, then:
+
+```bash
+docker load -i airgap-bundle.tar
+docker compose up -d
+```
+
+Open **http://localhost:7777**.
+
 ## De-identification
 
 Personal identifiers are removed from the OCR text using
-[Presidio](https://github.com/data-privacy-stack/presidio). Only the analyzer
-service is used; the app applies the redactions itself.
+[Presidio](https://github.com/data-privacy-stack/presidio).
+
+If you run without the Docker image, you would need to spin up the Presidio
+docker image if you wanted to de-identify documents:
 
 ```bash
 docker compose -f docker/presidio/compose.yaml up -d --build
@@ -66,8 +102,7 @@ docker compose -f docker/presidio/compose.yaml up -d --build
 
 Enable it in **Settings > De-identification** and press **Test**.
 
-The analyzer image bundles a clinical model and needs no network access at
-runtime:
+The analyzer image bundles a clinical de-id model and needs no network access:
 
 | Identifier | Detected by |
 | --- | --- |
@@ -76,17 +111,6 @@ runtime:
 | National Insurance numbers | Presidio `UkNinoRecognizer` |
 | UK postcodes | Custom pattern in `docker/presidio/uk-postcode-recognizer.yaml` |
 | Record and hospital numbers | The model's `ID` label |
-
-Behaviour:
-
-- Runs automatically after OCR, before a document becomes reviewable.
-- The review pane shows the original text under a translucent veil. Exports and
-  the LLM receive that text with each veiled span replaced by `[REDACTED]`.
-- Redactions are adjustable. Click a veil to keep the text, or select text and
-  redact it. Changes apply to the current page or to every page of the report.
-- Fails closed. If the analyzer is unreachable, documents stop at `ocr-failed`
-  rather than passing through un-redacted.
-- Page images are not redacted. Only text is exported.
 
 ## Splitting the pipeline across machines
 
@@ -123,49 +147,6 @@ shows the de-identified text instead.
 It is not enforced. A document that skipped de-identification is exported with
 the flag set to `false`, so a report-text file can contain identifiable text.
 Export and import both report this in a notification.
-
-## Docker deployment
-
-Two images: the app, with all OCR model weights baked in, and the Presidio
-analyzer. Neither needs network access at runtime. No LLM weights are bundled.
-
-Build on a machine with internet access:
-
-```bash
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-airgap.ps1
-```
-
-This produces `airgap-bundle.tar` (about 4.4 GB) containing both images. Add
-`-QuickReadOnly` to omit the Deep Read model and save about 1.4 GB. The
-equivalent by hand:
-
-```bash
-docker build --platform linux/amd64 --build-arg "FETCH_DEEP=--deep" -t document-ocr-extractor:latest .
-docker build --platform linux/amd64 -t document-ocr-extractor-presidio:latest docker/presidio
-docker save -o airgap-bundle.tar document-ocr-extractor:latest document-ocr-extractor-presidio:latest
-```
-
-Copy `airgap-bundle.tar` and `compose.yaml` to the target machine, then:
-
-```bash
-docker load -i airgap-bundle.tar
-docker compose up -d
-```
-
-Open **http://localhost:7777**.
-
-Notes:
-
-- **Use `localhost`.** OCR needs `SharedArrayBuffer`, which browsers expose
-  only on a cross-origin-isolated and secure page. `http://localhost` qualifies;
-  the same container reached from another machine over plain HTTP does not.
-  Serving other hosts requires HTTPS with a trusted certificate.
-- **The analyzer publishes no port.** It accepts unauthenticated requests, so it
-  is reachable only from the app container.
-- **Allow a few seconds after startup** before loading documents. Requests that
-  arrive before the analyzer is ready get a 502 and fail closed.
-- **Hard-reload after an upgrade** with Ctrl+Shift+R. Assets are served with
-  long cache lifetimes.
 
 ### Performance without a GPU
 
@@ -223,15 +204,6 @@ sample_reports/
 ```
 
 Click **CSV batch** and select the `sample_reports` folder.
-
-### Deployment to GitHub Pages
-
-Pushing to `main` deploys via `.github/workflows/deploy.yml`. The Vite `base`
-is `/` because the site is served from the origin root. For a public project
-site under `<owner>.github.io/document-ocr-extractor/`, set `base` back to
-`/document-ocr-extractor/`.
-
-Live: https://uk-generations-study.github.io/document-ocr-extractor/
 
 ## Provenance
 
