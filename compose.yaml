@@ -5,7 +5,7 @@
 # air-gapped host, and there is no build context there to go missing.
 #
 # On a networked machine:      scripts/build-airgap.ps1
-# On the air-gapped machine:   docker load -i airgap-bundle.tar
+# On the air-gapped machine:   docker load -i doe-docker-image.tar
 #                              docker compose up -d
 #                              # then open http://localhost:7777
 #

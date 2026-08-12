@@ -52,20 +52,20 @@ Build on a machine with internet access:
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-airgap.ps1
 ```
 
-This produces `airgap-bundle.tar` (about 4.4 GB) containing both images. Add
+This produces `doe-docker-image.tar` (about 4.4 GB) containing both images. Add
 `-QuickReadOnly` to omit the Deep Read model and save about 1.4 GB. The
 equivalent by hand:
 
 ```bash
 docker build --platform linux/amd64 --build-arg "FETCH_DEEP=--deep" -t document-ocr-extractor:latest .
 docker build --platform linux/amd64 -t document-ocr-extractor-presidio:latest docker/presidio
-docker save -o airgap-bundle.tar document-ocr-extractor:latest document-ocr-extractor-presidio:latest
+docker save -o doe-docker-image.tar document-ocr-extractor:latest document-ocr-extractor-presidio:latest
 ```
 
-Copy `airgap-bundle.tar` and `compose.yaml` to the target machine, then:
+Copy `doe-docker-image.tar` and `compose.yaml` to the target machine, then:
 
 ```bash
-docker load -i airgap-bundle.tar
+docker load -i doe-docker-image.tar
 docker compose up -d
 ```
 

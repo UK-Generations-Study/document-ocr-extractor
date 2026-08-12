@@ -14,8 +14,8 @@
 # tarball, which is the intended way in:
 #
 #   scripts/build-airgap.ps1
-#   # ...copy airgap-bundle.tar and compose.yaml across...
-#   docker load -i airgap-bundle.tar
+#   # ...copy doe-docker-image.tar and compose.yaml across...
+#   docker load -i doe-docker-image.tar
 #   docker compose up -d
 #   # then open http://localhost:7777
 #

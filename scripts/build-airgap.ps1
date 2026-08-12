@@ -10,12 +10,12 @@
 
     Copy the resulting tarball and compose.yaml to the air-gapped host:
 
-        docker load -i airgap-bundle.tar
+        docker load -i doe-docker-image.tar
         docker compose up -d
         # then open http://localhost:7777
 
 .PARAMETER OutFile
-    Where to write the bundle. Defaults to airgap-bundle.tar in the repo root.
+    Where to write the bundle. Defaults to doe-docker-image.tar in the repo root.
 
 .PARAMETER QuickReadOnly
     Omit the Deep Read VLM weights (~1.37 GB), leaving Quick Read only. Much
@@ -40,7 +40,7 @@
 #>
 [CmdletBinding()]
 param(
-    [string] $OutFile = (Join-Path $PSScriptRoot '..\airgap-bundle.tar'),
+    [string] $OutFile = (Join-Path $PSScriptRoot '..\doe-docker-image.tar'),
     [switch] $QuickReadOnly,
     [string] $Platform = 'linux/amd64'
 )
