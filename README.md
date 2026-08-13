@@ -52,8 +52,8 @@ On the HPC, run one of:
 
 | Command | Model | Notes
 | --- | --- | --- |
-| `sbatch gemma4_e4b.sh` | Gemma 4 E4B | Faster, smaller |
-| `sbatch gemma4_a4b.sh` | Gemma 4 A4B | Slower, larger |
+| `sbatch gemma4_e4b.sh` | Gemma 4 E4B | Smaller |
+| `sbatch gemma4_a4b.sh` | Gemma 4 A4B | Larger |
 
 The job runs for one hour. To change that, edit the time in the sbatch file's
 header:
