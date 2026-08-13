@@ -12,6 +12,7 @@ de-identified text is sent to an LLM.
 
 - [Requirements](#requirements)
 - [Pipeline modes](#pipeline-modes)
+- [Running an LLM on the ICR HPC](#running-an-llm-on-the-icr-hpc)
 - [Docker deployment](#docker-deployment)
 - [De-identification](#de-identification)
 - [Splitting the pipeline across machines](#splitting-the-pipeline-across-machines)
@@ -41,10 +42,70 @@ OpenAI-compatible API, Google Gemini, or an in-browser model that needs no
 key. Self-hosted servers such as llama-server, vLLM and Ollama work with a
 base URL and no API key.
 
+## Running an LLM on the ICR HPC
+
+Start a model on the HPC and reach it from your laptop through an SSH tunnel.
+
+### 1. Submit the job
+
+On the HPC, run one of:
+
+| Command | Model | Notes
+| --- | --- | --- |
+| `sbatch gemma4_e4b.sh` | Gemma 4 E4B | Faster, smaller |
+| `sbatch gemma4_a4b.sh` | Gemma 4 A4B | Slower, larger |
+
+The job runs for one hour. To change that, edit the time in the sbatch file's
+header:
+
+```bash
+#SBATCH --time=01:00:00
+```
+
+Output is written to `g4e4b.txt` or `g4a4b.txt`, matching the script you
+submitted.
+
+### 2. Find the GPU node
+
+```bash
+cqueue -u <username>
+```
+
+```
+     JOBID     PARTITION            NAME         USER     STATE   TIME_LIMIT CPU TRES_PER_N           START_TIME NODELIST(REASON)
+  22279025         gpuhm           g4e4b       dadams   RUNNING      1:00:00  16 gres:gpu:1  2026-08-11T16:14:42          gpuhm02
+```
+
+The node is in the last column. In this example it is `gpuhm02`.
+
+### 3. Open the tunnel
+
+On your ICR laptop:
+
+```bash
+ssh -N -L 8050:<gpu node>:8050 <username>@alma.icr.ac.uk
+```
+
+For example:
+
+```bash
+ssh -N -L 8050:gpuhm02:8050 dadams@alma.icr.ac.uk
+```
+
+Leave the tunnel open while the LLM is running. You can close the tunnel with Ctrl+C.
+
+### 4. Point the tool at it
+
+Enter this as the **Base URL** in the setup wizard, and leave the API key
+blank:
+
+```
+http://localhost:8050/v1
+```
+
 ## Docker deployment
 
-Two images: the app, with all OCR model weights baked in, and the Presidio
-analyzer. Neither needs network access at runtime. No LLM weights are bundled.
+The docker bundle includes 1. the App (including the OCR model weights) and 2. Presidio (for de-identification).
 
 Build on a machine with internet access:
 
