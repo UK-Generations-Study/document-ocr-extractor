@@ -6,6 +6,7 @@
 import { OpenAI } from 'openai';
 import { BaseLLMProvider } from './base.js';
 import { MAX_RETRIES, API_PROVIDERS, NO_KEY } from '../core/constants.js';
+import { localNetworkFetch } from '../core/localNetwork.js';
 
 export class OpenAIProvider extends BaseLLMProvider {
     /**
@@ -33,7 +34,8 @@ export class OpenAIProvider extends BaseLLMProvider {
             const testClient = new OpenAI({
                 baseURL: this.baseUrl,
                 apiKey: this.apiKey,
-                dangerouslyAllowBrowser: true
+                dangerouslyAllowBrowser: true,
+                fetch: localNetworkFetch(this.baseUrl)
             });
             await testClient.models.list();
             return true;
@@ -56,7 +58,11 @@ export class OpenAIProvider extends BaseLLMProvider {
         this.client = new OpenAI({
             baseURL: this.baseUrl,
             apiKey: this.apiKey,
-            dangerouslyAllowBrowser: true
+            dangerouslyAllowBrowser: true,
+            // Declares the loopback/local address space when the endpoint is
+            // one, so Chrome prompts for permission instead of refusing the
+            // request outright. See src/core/localNetwork.js.
+            fetch: localNetworkFetch(this.baseUrl)
         });
     }
 

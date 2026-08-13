@@ -53,6 +53,7 @@ import { enqueueDocument, primeQueueFromDb, recoverStuckDocuments } from './src/
 import { enqueueExtraction, primeExtractionFromDb } from './src/extract/extract.js';
 
 import { API_PROVIDERS, DEFAULT_OPENAI_BASE_URL, NO_KEY } from './src/core/constants.js';
+import { localNetworkFetch } from './src/core/localNetwork.js';
 
 import { OpenAI } from 'openai';
 import { GoogleGenAI } from '@google/genai';
@@ -178,7 +179,16 @@ async function validateOpenAiKey(baseUrl, apiKey) {
     try {
         // NO_KEY when the user left it blank: llama-server and friends ignore
         // the header, and the SDK will not construct a client without a value.
-        const c = new OpenAI({ baseURL: baseUrl, apiKey: apiKey || NO_KEY, dangerouslyAllowBrowser: true });
+        //
+        // localNetworkFetch matters most HERE. This is the first request the
+        // app makes to a new endpoint, so it is where a local address gets
+        // refused, and where the permission prompt needs to appear.
+        const c = new OpenAI({
+            baseURL: baseUrl,
+            apiKey: apiKey || NO_KEY,
+            dangerouslyAllowBrowser: true,
+            fetch: localNetworkFetch(baseUrl),
+        });
         const resp = await c.models.list();
         return { ok: true, client: c, modelIds: resp.data.map((m) => m.id).sort() };
     } catch (err) {
