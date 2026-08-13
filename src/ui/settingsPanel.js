@@ -11,7 +11,8 @@
 import { getSettings, saveSettings, REVIEW_MODES } from '../core/settings.js';
 import { canExtract } from '../core/flags.js';
 import { getPipelineMode, setPipelineMode, MODE_COPY as PIPELINE_COPY, PIPELINE_MODES } from '../core/mode.js';
-import { DEFAULT_ENTITIES, checkHealth, supportedEntities } from '../deid/presidio.js';
+import { DEFAULT_ENTITIES, checkHealth, isAnalyzerAvailable, supportedEntities } from '../deid/presidio.js';
+import { DEID_UNAVAILABLE_HINT } from './modePicker.js';
 import { allDocuments, getOcrPagesByDoc, putDocument } from '../db.js';
 import { emitAppEvent } from '../core/bus.js';
 import { countDocLowConfLines } from '../ocr/confidence.js';
@@ -152,7 +153,7 @@ export async function openSettingsPanel(deps) {
             <div class="sp-panel hidden" data-panel="privacy">
             <section>
                 <h3 class="text-xs font-semibold uppercase tracking-wide text-gray-500">De-identification</h3>
-                <label class="mt-2 flex items-start gap-2 text-sm text-gray-800 cursor-pointer">
+                <label id="sp-deid-label" class="mt-2 flex items-start gap-2 text-sm text-gray-800 cursor-pointer">
                     <input id="sp-deid" type="checkbox" ${settings.deidEnabled ? 'checked' : ''}
                            class="mt-0.5 h-4 w-4 rounded text-green-600 focus:ring-green-500"/>
                     <span>
@@ -162,6 +163,7 @@ export async function openSettingsPanel(deps) {
                             identifiers are replaced with <code>[REDACTED]</code>. Exports (and the
                             LLM, when extraction is enabled) only ever see the redacted text.
                         </span>
+                        <span id="sp-deid-unavailable" class="hidden text-xs text-amber-700 mt-1"></span>
                     </span>
                 </label>
                 <div id="sp-deid-opts" class="mt-3 space-y-3 ${settings.deidEnabled ? '' : 'hidden'}">
@@ -377,6 +379,26 @@ function wireDeidControls(mount, settings) {
         statusEl.className = `mt-1 text-xs ${
             tone === 'ok' ? 'text-green-700' : tone === 'error' ? 'text-red-700' : 'text-gray-500'}`;
     };
+
+    // Whether an analyzer answers at all. Probed in the background so opening
+    // Settings is never blocked on it; the control starts as stored and is
+    // locked afterwards if nothing is there.
+    //
+    // Only ever locks turning it ON. A profile that already has it on with no
+    // analyzer reachable is stuck failing closed at 'ocr-failed', so switching
+    // it OFF has to stay possible - that is the way out.
+    void (async () => {
+        const base = urlInput.value.trim() || '/presidio';
+        if (await isAnalyzerAvailable({ base })) return;
+        const note = mount.querySelector('#sp-deid-unavailable');
+        const label = mount.querySelector('#sp-deid-label');
+        if (label) label.title = DEID_UNAVAILABLE_HINT;
+        if (note) {
+            note.textContent = DEID_UNAVAILABLE_HINT;
+            note.classList.remove('hidden');
+        }
+        if (!toggle.checked) toggle.disabled = true;
+    })();
 
     toggle.addEventListener('change', async () => {
         opts.classList.toggle('hidden', !toggle.checked);

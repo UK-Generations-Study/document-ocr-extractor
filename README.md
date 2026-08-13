@@ -137,13 +137,17 @@ Open **http://localhost:7777**.
 Personal identifiers are removed from the OCR text using
 [Presidio](https://github.com/data-privacy-stack/presidio).
 
-**If you run without the Docker image, you need to spin up the Presidio docker image if you want de-identification support**:
+**Use the [Docker deployment](#docker-deployment) if you want de-identification.**
+It includes the analyzer and the reverse proxy the app needs to reach it. The
+app calls the analyzer through the same-origin path `/presidio`, because
+Presidio sends no CORS headers and cannot be called cross-origin. GitHub Pages
+is a static host and cannot forward that path, so de-identification is
+unavailable there.
 
-```bash
-docker compose -f docker/presidio/compose.yaml up -d --build
-```
-
-Enable it in **Settings > De-identification** and press **Test**.
+Setup asks whether to enable it, and checks first whether an analyzer answers.
+Where none does, the option is off and cannot be switched on. De-identification
+fails closed: if it is on and the analyzer becomes unreachable, documents stop
+at `ocr-failed` rather than passing through un-redacted.
 
 The analyzer image bundles a clinical de-id model and needs no network access:
 

@@ -135,4 +135,29 @@ export async function checkHealth({ base, signal } = {}) {
     return true;
 }
 
+/**
+ * Is an analyzer reachable at all?
+ *
+ * Distinct from checkHealth, which proves the model works and is what the
+ * Settings "Test" button runs. This one answers a narrower question: does this
+ * deployment have an analyzer behind its `/presidio` path? It is used to decide
+ * whether de-identification can be OFFERED, so it must be cheap and must not
+ * hang the setup screen. A static host has nothing behind that path and
+ * answers 404, which is a reachable server but not an analyzer, so the status
+ * is checked rather than just the absence of a network error.
+ *
+ * Never throws. Anything other than a healthy answer means "not available".
+ */
+export async function isAnalyzerAvailable({ base, timeoutMs = 4000 } = {}) {
+    try {
+        const res = await fetch(joinUrl(base, '/health'), {
+            method: 'GET',
+            signal: AbortSignal.timeout(timeoutMs),
+        });
+        return res.ok;
+    } catch {
+        return false;
+    }
+}
+
 export { PresidioError };
