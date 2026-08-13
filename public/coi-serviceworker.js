@@ -25,9 +25,55 @@ if (typeof window === 'undefined') {
     }
   });
 
+  /**
+   * LOCAL PATCH (not upstream): is this URL in the loopback or local address
+   * space? Mirrors src/core/localNetwork.js, which a worker script cannot
+   * import. Keep the two in step.
+   */
+  const isLocalAddressSpace = (url) => {
+    let host;
+    try {
+      host = new URL(url).hostname.toLowerCase().replace(/^\[|\]$/g, '');
+    } catch {
+      return false;
+    }
+    return (
+      host === 'localhost' || host.endsWith('.localhost') ||
+      host === '::1' || /^f[cd][0-9a-f]{2}:/.test(host) ||
+      host.endsWith('.local') ||
+      /^127\.\d+\.\d+\.\d+$/.test(host) ||
+      /^10\.\d+\.\d+\.\d+$/.test(host) ||
+      /^192\.168\.\d+\.\d+$/.test(host) ||
+      /^169\.254\.\d+\.\d+$/.test(host) ||
+      /^172\.(1[6-9]|2\d|3[01])\.\d+\.\d+$/.test(host)
+    );
+  };
+
   self.addEventListener('fetch', function (event) {
     const r = event.request;
     if (r.cache === 'only-if-cached' && r.mode !== 'same-origin') return;
+
+    // LOCAL PATCH (not upstream). Leave cross-origin requests into the local
+    // or loopback address space entirely alone.
+    //
+    // Chrome gates those behind the Local Network Access permission, and a
+    // request only gets a prompt if it declares where it is going via the
+    // `targetAddressSpace` fetch option (src/core/localNetwork.js sets it for
+    // a local LLM endpoint). That option lives on the fetch INIT, not on the
+    // Request object. Re-issuing the request below as `fetch(request)` drops
+    // it, so the declared request the page made arrives at the network
+    // undeclared and Chrome refuses it: "Permission was denied for this
+    // request to access the loopback address space".
+    //
+    // Nothing is lost by skipping them. This worker exists to synthesize
+    // COOP/COEP on a host that cannot send headers, and neither header changes
+    // anything about a cross-origin API call the page makes.
+    //
+    // Deliberately narrow: same-origin requests still go through (the document
+    // needs the headers), and so do cross-origin PUBLIC ones, which need the
+    // Cross-Origin-Resource-Policy added below for the model downloads to pass
+    // COEP in require-corp mode.
+    if (r.url.indexOf(self.location.origin) !== 0 && isLocalAddressSpace(r.url)) return;
 
     const request =
       coepCredentialless && r.mode === 'no-cors' ? new Request(r, { credentials: 'omit' }) : r;
@@ -45,7 +91,13 @@ if (typeof window === 'undefined') {
             headers: newHeaders,
           });
         })
-        .catch((e) => console.error(e)),
+        // Returning undefined here made respondWith throw "Failed to convert
+        // value to 'Response'", burying the real error under a second one.
+        // Response.error() surfaces it to the page as a plain network failure.
+        .catch((e) => {
+          console.error(e);
+          return Response.error();
+        }),
     );
   });
 } else {
