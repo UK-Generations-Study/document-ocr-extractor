@@ -33,7 +33,7 @@
     "fastest-levenshtein": "^1.0.16",
     "fflate": "^0.8.2",
     "idb": "^8.0.3",
-    "js-yaml": "^5.2.0",
+    "js-yaml": "^5.4.1",
     "jsonld": "^9.0.0",
     "mdast-util-from-markdown": "^2.0.3",
     "mdast-util-gfm": "^3.1.0",
